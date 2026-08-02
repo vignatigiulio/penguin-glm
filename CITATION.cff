@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+title: "penguin-glm: genomic language models for a non-model species"
+message: "If you use this software, please cite the thesis below."
+type: software
+authors:
+  - family-names: Vignati
+    given-names: Giulio
+    affiliation: "Università Politecnica delle Marche"
+license: MIT
+repository-code: "https://github.com/vignatigiulio/penguin-glm"
+keywords:
+  - genomic language models
+  - DNA foundation models
+  - non-model species
+  - GC content
+  - LoRA
+references:
+  - type: thesis
+    title: "Modelli linguistici del DNA per il genoma di una specie non modello"
+    thesis-type: "Master's thesis"
+    authors:
+      - family-names: Vignati
+        given-names: Giulio
+    institution:
+      name: "Università Politecnica delle Marche"
+    year: 2026
