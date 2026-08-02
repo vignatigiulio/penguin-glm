@@ -243,8 +243,11 @@ Installation order matters — see [Known issues](#known-issues).
 conda create -n janusdna python=3.11    # exactly 3.11
 conda activate janusdna
 pip install mamba-ssm==2.2.4
-pip install -r env/janusdna-requirements.txt
 ```
+
+Then install the remaining dependencies from the upstream JanusDNA repository's
+own instructions. The Python version is not negotiable: the `mamba_ssm` 2.2.4
+wheel is built for cp311 and torch 2.5.
 
 ### Analysis only
 
@@ -288,7 +291,7 @@ python src/extract_crossdna.py \
   --weights  $PENGUIN_ROOT/weights/8.1M \
   --windows  $PENGUIN_ROOT/out/windows.parquet \
   --out      $PENGUIN_ROOT/out/emb_crossdna_81.npz \
-  --pooling mean --sdp default --clamp
+  --pooling mean --sdp default
 
 # JanusDNA — stem-aware automatically, no flag needed
 python src/extract_janusdna.py \
@@ -299,6 +302,12 @@ python src/extract_janusdna.py \
   --output          $PENGUIN_ROOT/out/emb_janusdna_144.npz
 ```
 
+For the 519M checkpoint and for any from-scratch checkpoint, add `--amp-fp32
+--sdpa-patch`: those configurations overflow under the model's internal bf16
+autocast. `--clamp` also exists, but it is a diagnostic rather than a fix — it
+zeroes non-finite values and reports how many there were, and any run with a
+non-zero count should be treated as failed rather than used.
+
 Sanity-check the result before spending GPU time downstream:
 
 ```bash
@@ -308,9 +317,24 @@ python tools/check_embeddings.py --npz $PENGUIN_ROOT/out/emb_janusdna_144.npz --
 ### 4. Cluster, probe, classify
 
 ```bash
-python src/cluster_embeddings.py   --windows .../windows.parquet --emb .../emb.npz --outdir .../cluster --umap
-python src/classify_baselines.py   --windows .../windows.parquet --emb .../emb.npz --outdir .../clf --do-kmer --do-trivial
-python src/mlp_probe.py            --windows .../windows.parquet --emb .../emb.npz --outdir .../probe
+# cluster_embeddings.py and classify_baselines.py take --emb as name=path and
+# accept the flag repeatedly, so several models go into one comparison.
+python src/cluster_embeddings.py \
+  --windows $PENGUIN_ROOT/out/windows.parquet \
+  --emb janus144=$PENGUIN_ROOT/out/emb_janusdna_144.npz \
+  --emb crossdna81=$PENGUIN_ROOT/out/emb_crossdna_81.npz \
+  --outdir $PENGUIN_ROOT/out/cluster --umap
+
+python src/classify_baselines.py \
+  --windows $PENGUIN_ROOT/out/windows.parquet \
+  --emb janus144=$PENGUIN_ROOT/out/emb_janusdna_144.npz \
+  --outdir $PENGUIN_ROOT/out/clf --do-kmer --do-trivial
+
+# mlp_probe.py takes a single bare path instead — one model per run.
+python src/mlp_probe.py \
+  --windows $PENGUIN_ROOT/out/windows.parquet \
+  --emb $PENGUIN_ROOT/out/emb_janusdna_144.npz \
+  --outdir $PENGUIN_ROOT/out/probe
 ```
 
 ### 5. LoRA fine-tuning
@@ -337,16 +361,29 @@ empirically which projections an adapter actually reaches.
 ## Pre-training from scratch
 
 ```bash
-python pretrain/make_pretrain_bed_clean.py --fasta ... --out penguin-pretrain.bed --seqlen 1048576
+# --windows is required: it is what tells the script which scaffolds to exclude
+python pretrain/make_pretrain_bed_clean.py \
+  --fasta   $PENGUIN_ROOT/data/penguin/GCF_965638725.1.fna \
+  --windows $PENGUIN_ROOT/out/windows.parquet \
+  --out     $PENGUIN_ROOT/data/penguin/penguin_pretrain_clean.bed \
+  --seqlen  131072
+
 bash  pretrain/pretrain_janusdna.sh
 bash  pretrain/pretrain_crossdna.sh
-python pretrain/crossdna_ckpt_to_hf.py --ckpt ... --ref-dir ... --out-dir ...
+
+python pretrain/crossdna_ckpt_to_hf.py \
+  --ckpt    .../checkpoints/last.ckpt \
+  --ref-dir $CROSSDNA_REPO/crossdna_inference \
+  --out-dir $PENGUIN_ROOT/crossdna/hf_scratch_penguin_clean
 ```
 
-**The `--interval` value is not free.** JanusDNA's `HG38Dataset` ignores the BED
-file's `end` column and recomputes it as `start + MAX_ALLOWED_LENGTH`, where
-`MAX_ALLOWED_LENGTH = 2^20 = 1048576`. Generating the BED with any other
-interval silently produces windows of the wrong length.
+**The tiling step is not free.** JanusDNA's `HG38Dataset` ignores the BED file's
+`end` column and recomputes it as `start + MAX_ALLOWED_LENGTH`, where
+`MAX_ALLOWED_LENGTH = 2^20 = 1048576`. `--seqlen` is the training sequence
+length and must DIVIDE 2^20; `--tile-step` is the BED interval and defaults to
+2^20, which is what JanusDNA needs. For CrossDNA and HyenaDNA, set
+`--tile-step` equal to `--seqlen` so one BED row is one training example.
+Getting this wrong silently produces windows of the wrong length.
 
 CrossDNA checkpoints must be converted to HuggingFace layout before extraction
 or LoRA; `crossdna_ckpt_to_hf.py` produces a directory structurally identical to
