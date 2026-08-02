@@ -1,0 +1,46 @@
+# ---- data and model artifacts (never commit) ----
+*.npz
+*.parquet
+*.ckpt
+*.safetensors
+*.tar.bz2
+*.tar.gz
+*.fna
+*.fa
+*.gff
+*.bed
+*.fai
+
+# ---- run outputs ----
+out/
+out_L*/
+outputs/
+pretrain_scratch/
+checkpoints/
+weights*/
+wandb/
+lightning_logs/
+*.log
+
+# ---- environments ----
+env_*/
+.venv/
+venv/
+*.egg-info/
+
+# ---- python ----
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+
+# ---- figures (regenerate with analysis/make_figures.py) ----
+figures/
+*.pdf
+*.png
+
+# ---- os / editor ----
+.DS_Store
+.vscode/
+.idea/
