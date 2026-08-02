@@ -57,7 +57,6 @@ original working directory.
 | `09_confusion_compare.py` | `analysis/compare_confusion.py` |
 | `confronta_confusioni.py` | `analysis/recall_vs_window.py` |
 | `per_class_accuracy.py` | `analysis/per_class_accuracy.py` |
-| `consolidate_DEF.py` | `analysis/consolidate_results.py` |
 | — (new) | `analysis/audit_results.py` |
 
 ## Tools (`tools/`)
@@ -92,3 +91,4 @@ original working directory.
 | `run_extraction_janusdna.sh`, `run_extraction_janusdna72.sh` | superseded by `eval_after_pretrain.sh` |
 | `cleanup_artifacts.sh`, `collect_for_github.sh` | workspace housekeeping, not part of the pipeline |
 | `DEF/scripts/*` | snapshot duplicates (8 of 11 byte-identical to the working copies) |
+| `consolidate_DEF.py` | workspace-specific archival script: copies ~40 artifacts between absolute paths that exist only on the original server. Its verification role — reading real numbers from the JSONs rather than transcribing them — is covered generically by `analysis/audit_results.py`. |
