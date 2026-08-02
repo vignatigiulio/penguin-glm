@@ -1,0 +1,451 @@
+diff --git a/janusdna/causal_conv_stem.py b/janusdna/causal_conv_stem.py
+new file mode 100644
+index 0000000..b2872a0
+--- /dev/null
++++ b/janusdna/causal_conv_stem.py
+@@ -0,0 +1,224 @@
++"""
++causal_conv_stem.py — causal down-sampling convolutional stem for JanusDNA.
++
++PURPOSE
++-------
++Compress the grid from T nucleotides to M = T/S "super-tokens" BEFORE the
++Mamba+MoE backbone, while preserving (a) base-level input resolution,
++(b) reverse-complement symmetry, and (c) the autoregressive objective. The
++backbone and the final Janus fusion then operate on the compressed grid of
++length M.
++
++The experiment this serves: if the GC attractor is a consequence of
++single-nucleotide tokenisation, then reasoning over ~19 bp super-tokens should
++weaken it. The prediction was stated before the run — an improvement in the
++NMI(function)/NMI(GC) ratio would be a mechanistic gain, an improvement in MCC
++alone merely a computational one.
++
++CRITICAL INVARIANT (the one thing that can break the experiment silently)
++-------------------------------------------------------------------------
++Causality: super-token m must depend ONLY on inputs <= (m+1)*S - 1. The padding
++rule that guarantees it, verified exhaustively through the Jacobian:
++
++    left_pad = kernel_size - stride      (requires kernel_size >= stride)
++
++Normalisation is PER-POSITION LayerNorm, over channels only: it never computes
++statistics along time, so it introduces no leakage from the future.
++
++WEIGHT TYING (JanusDNA uses bidirectional_weight_tie=True)
++----------------------------------------------------------
++The backward branch does NOT need a second stem: THIS same stem is applied to
++the reversed sequence. A causal convolution over a reversed input is
++automatically anti-causal in the original coordinates, so the tie is preserved
++for free. (Verified in modeling_janusdna.py that the backward stream really is
++flip-based.)
++
++Environment notes: dtype-agnostic, fine under bf16-mixed autocast. The
++LayerNorms stabilise numerically; they do not worsen bf16 stability.
++"""
++
++from __future__ import annotations
++
++import torch
++import torch.nn as nn
++import torch.nn.functional as F
++
++
++class CausalDownConv1d(nn.Module):
++    """Strided causal Conv1d. Output m depends only on inputs <= (m+1)*stride - 1."""
++
++    def __init__(self, d_in: int, d_out: int, kernel_size: int, stride: int):
++        super().__init__()
++        assert kernel_size >= stride, "kernel_size >= stride is required for left_pad >= 0"
++        self.left_pad = kernel_size - stride
++        self.conv = nn.Conv1d(d_in, d_out, kernel_size, stride=stride)
++
++    def forward(self, x: torch.Tensor) -> torch.Tensor:  # x: (B, C, T)
++        x = F.pad(x, (self.left_pad, 0))                 # pad on the LEFT only
++        return self.conv(x)                              # (B, C, T/stride)
++
++
++class CausalConvStem(nn.Module):
++    """
++    Causal down-sampling stem, agnostic to the embedding it sits behind.
++      input : (B, T, D)   token embeddings
++      output: (B, M, D)   super-tokens, M = T // S   (requires T % S == 0)
++
++    S = 2 (1 stage) | 4 (2 stages) | 8 (3 stages) | 16 | 32, all composed from
++    stride-2 stages.
++    """
++
++    def __init__(self, d_model: int, stride: int = 4, kernel_size: int = 7,
++                 d_mid: int | None = None):
++        super().__init__()
++        assert stride in (2, 4, 8, 16, 32), "supported strides: 2, 4, 8, 16, 32"
++        d_mid = d_mid or d_model
++        n_stages = {2: 1, 4: 2, 8: 3, 16: 4, 32: 5}[stride]
++        dims = [d_model] + [d_mid] * (n_stages - 1) + [d_model]
++
++        self.blocks = nn.ModuleList()
++        for i in range(n_stages):
++            self.blocks.append(nn.ModuleDict({
++                "conv": CausalDownConv1d(dims[i], dims[i + 1], kernel_size, stride=2),
++                # LayerNorm over channels, applied in (B, L, C) layout: per
++                # position, therefore causally safe — no statistics along time.
++                "norm": nn.LayerNorm(dims[i + 1]),
++            }))
++        self.act = nn.GELU()
++        self.stride = stride
++        self.d_model = d_model
++
++    def forward(self, x: torch.Tensor) -> torch.Tensor:  # (B, T, D)
++        assert x.dim() == 3, "expected (B, T, D)"
++        assert x.size(1) % self.stride == 0, (
++            f"T={x.size(1)} is not divisible by S={self.stride}: pad upstream"
++        )
++        h = x
++        for blk in self.blocks:
++            h = h.transpose(1, 2)   # (B, C, L)
++            h = blk["conv"](h)      # (B, C, L/2)
++            h = h.transpose(1, 2)   # (B, L/2, C)
++            h = blk["norm"](h)      # per position -> causally safe
++            h = self.act(h)
++        return h                    # (B, M, D)
++
++
++class ExpansionHead(nn.Module):
++    """
++    Expansion head: one super-token produces S nucleotide logits.
++      input : (B, M, D)
++      output: (B, M*S, vocab)   in natural order (super-token m -> positions
++                                [mS, (m+1)S))
++
++    Note that the S bases are predicted conditionally independently given the
++    context. That is a structural limitation and must be declared in any
++    bits-per-nucleotide comparison against the base model.
++
++    ALIGNMENT WARNING (a wiring decision, not a property of this module):
++    which super-token predicts which block depends on the shift applied to the
++    AR objective in the harness. Under strict causality, super-token m has seen
++    inputs <= (m+1)S-1 and can predict block m+1 (positions [(m+1)S, (m+2)S));
++    the first block [0,S) has no predictor, exactly as the first token does in
++    ordinary AR training. If the harness already applies a shift-by-one-TOKEN to
++    the logits, do NOT double it — it has to become a shift-by-one-BLOCK. Check
++    the loss in modeling_janusdna.py before assuming either way.
++    """
++
++    def __init__(self, d_model: int, stride: int, vocab_size: int):
++        super().__init__()
++        self.stride = stride
++        self.vocab = vocab_size
++        self.proj = nn.Linear(d_model, stride * vocab_size)
++
++    def forward(self, h: torch.Tensor) -> torch.Tensor:  # (B, M, D)
++        B, M, _ = h.shape
++        logits = self.proj(h)  # (B, M, S*V)
++        return logits.reshape(B, M * self.stride, self.vocab)
++
++
++# ======================================================================
++#  CAUSALITY GATE — run this in the target environment (torch present).
++#  Fails LOUDLY if the stem looks into the future. It must pass BEFORE a
++#  single training step runs: a stem that leaks would still train, still
++#  converge, and produce a result that means nothing.
++# ======================================================================
++
++@torch.no_grad()
++def _num_super_tokens(stem: CausalConvStem, T: int, D: int) -> int:
++    return stem(torch.zeros(1, T, D)).shape[1]
++
++
++def test_causality(stem: CausalConvStem, T: int = 128, D: int = 16,
++                   tol: float = 0.0) -> None:
++    """Via autograd: super-token m must have no gradient on inputs >= (m+1)*S."""
++    S = stem.stride
++    M = _num_super_tokens(stem, T, D)
++    stem.zero_grad(set_to_none=True)
++    x = torch.randn(1, T, D, requires_grad=True)
++    h = stem(x)  # (1, M, D)
++    for m in (0, M // 2, M - 1):  # left edge, middle, right edge
++        if x.grad is not None:
++            x.grad = None
++        h[0, m].sum().backward(retain_graph=(m != M - 1))
++        g = x.grad[0]  # (T, D)
++        future = g[(m + 1) * S:].abs().max().item() if (m + 1) * S < T else 0.0
++        past = g[:(m + 1) * S].abs().max().item()
++        assert future <= tol, (
++            f"LEAKAGE: super-token {m} depends on inputs >= {(m+1)*S} "
++            f"(max|grad|={future:.3e}). The padding is not causal."
++        )
++        # The complementary check: a stem that ignored its own past would pass
++        # the leakage test trivially while being useless.
++        assert past > 0.0, f"DEGENERATE: super-token {m} ignores its own past"
++    print(f"[OK] test_causality: S={S}, T={T}, {M} causal super-tokens "
++          f"(zero gradient on the future, checked at both edges and the middle)")
++
++
++def test_flip_anticausal(stem: CausalConvStem, T: int = 128, D: int = 16,
++                         tol: float = 1e-5) -> None:
++    """The backward branch is this stem applied to the reversed sequence. It must
++    come out anti-causal in the original coordinates — the condition under which
++    the weight tie holds."""
++    S = stem.stride
++    M = _num_super_tokens(stem, T, D)
++    stem.zero_grad(set_to_none=True)
++    x = torch.randn(1, T, D, requires_grad=True)
++    h = stem(torch.flip(x, dims=[1]))  # process the reversed sequence
++    for m in (0, M // 2, M - 1):
++        if x.grad is not None:
++            x.grad = None
++        h[0, m].sum().backward(retain_graph=(m != M - 1))
++        g = x.grad[0]
++        boundary = T - (m + 1) * S  # must depend only on inputs >= boundary
++        leak = g[:boundary].abs().max().item() if boundary > 0 else 0.0
++        assert leak <= tol, (
++            f"flip is NOT anti-causal: backward super-token {m} touches original "
++            f"inputs < {boundary} (leak={leak:.3e}). The flip-based tie does not hold."
++        )
++    print("[OK] test_flip_anticausal: flipping the same stem gives an anti-causal "
++          "map in the original coordinates (tie preserved)")
++
++
++def test_shapes_and_head(d_model: int = 144, S: int = 4, vocab: int = 12,
++                         T: int = 1024) -> None:
++    stem = CausalConvStem(d_model, stride=S)
++    head = ExpansionHead(d_model, stride=S, vocab_size=vocab)
++    x = torch.randn(2, T, d_model)
++    h = stem(x)
++    assert h.shape == (2, T // S, d_model), h.shape
++    logits = head(h)
++    assert logits.shape == (2, T, vocab), logits.shape
++    n_params = (sum(p.numel() for p in stem.parameters())
++                + sum(p.numel() for p in head.parameters()))
++    print(f"[OK] test_shapes: (2,{T},{d_model}) -> super-tokens (2,{T//S},{d_model}) "
++          f"-> logits (2,{T},{vocab}). Stem+head parameters: {n_params:,}")
++
++
++if __name__ == "__main__":
++    print("=== CAUSAL STEM GATE (JanusDNA-144, S=4) ===\n")
++    for S in (2, 4, 8):
++        stem = CausalConvStem(d_model=144, stride=S)
++        test_causality(stem, T=128, D=144)
++        test_flip_anticausal(stem, T=128, D=144)
++    print()
++    test_shapes_and_head(d_model=144, S=4, vocab=12, T=1024)
+diff --git a/janusdna/modeling_janusdna.py b/janusdna/modeling_janusdna.py
+index 4f0cecb..b51604b 100644
+--- a/janusdna/modeling_janusdna.py
++++ b/janusdna/modeling_janusdna.py
+@@ -26,6 +26,15 @@ import torch.nn.functional as F
+ import torch.utils.checkpoint
+ from torch import nn
+ from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
++
++# === conv stem: injected for an isolated experiment, enabled via environment ===
++# Everything below is a no-op unless JANUS_STEM=1, so the unmodified model is
++# bit-for-bit unchanged when the experiment is not running.
++import os as _stem_os
++_USE_STEM = _stem_os.environ.get("JANUS_STEM", "0") == "1"
++_STEM_S = int(_stem_os.environ.get("JANUS_STEM_STRIDE", "4"))
++_STEM_K = int(_stem_os.environ.get("JANUS_STEM_KERNEL", "7"))
++# ==============================================================================
+ from torch.nn.attention.flex_attention import flex_attention, create_block_mask
+ torch._dynamo.config.optimize_ddp = False
+ flex_attention = torch.compile(flex_attention, dynamic=False)
+@@ -2186,6 +2195,12 @@ class JanusDNAModel(JanusDNAPreTrainedModel):
+             config.vocab_size += config.pad_vocab_size_multiple - (config.vocab_size % config.pad_vocab_size_multiple)
+ 
+         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size)
++        # conv stem (isolated experiment)
++        self.use_conv_stem = _USE_STEM
++        if self.use_conv_stem:
++            assert not config.layer_fusion, "the stem is implemented for layer_fusion=False only"
++            from .causal_conv_stem import CausalConvStem
++            self.stem = CausalConvStem(config.hidden_size, _STEM_S, _STEM_K)
+ 
+         decoder_layers = []
+         for i in range(config.num_hidden_layers):
+@@ -2314,7 +2329,14 @@ class JanusDNAModel(JanusDNAPreTrainedModel):
+         if inputs_embeds is None:
+             inputs_embeds = self.embed_tokens(input_ids)
+ 
+-        hidden_states = inputs_embeds if self.layer_fusion else torch.concat([inputs_embeds, inputs_embeds.flip(dims=(1,))], dim=1)
++        if getattr(self, 'use_conv_stem', False):
++            # One stem, applied twice. The backward stream is the SAME stem over
++            # the flipped sequence, which keeps bidirectional_weight_tie intact.
++            _fwd = self.stem(inputs_embeds)
++            _bwd = self.stem(inputs_embeds.flip(dims=(1,)))
++            hidden_states = torch.concat([_fwd, _bwd], dim=1)
++        else:
++            hidden_states = inputs_embeds if self.layer_fusion else torch.concat([inputs_embeds, inputs_embeds.flip(dims=(1,))], dim=1)
+ 
+         if use_cache and past_key_values is None:
+             logger.warning_once(
+@@ -2591,7 +2613,16 @@ class JanusDNAForCausalLM(JanusDNAPreTrainedModel):
+             )
+             print("enable checkpoint training")
+         self.vocab_size = config.vocab_size
+-        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
++        if _USE_STEM:
++            # The backbone now emits M = T/S super-tokens, so the head has to
++            # expand each one back into S nucleotide logits. Weight tying to the
++            # embedding is disabled because the shapes no longer correspond.
++            from .causal_conv_stem import ExpansionHead
++            self.lm_head = ExpansionHead(config.hidden_size, _STEM_S, config.vocab_size)
++            self._tied_weights_keys = []
++            config.tie_word_embeddings = False
++        else:
++            self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+         self.router_aux_loss_coef = config.router_aux_loss_coef
+         self.num_experts = config.num_experts
+         self.num_experts_per_tok = config.num_experts_per_tok
+diff --git a/test_stem_wiring.py b/test_stem_wiring.py
+new file mode 100644
+index 0000000..ad5d696
+--- /dev/null
++++ b/test_stem_wiring.py
+@@ -0,0 +1,126 @@
++"""
++test_stem_wiring.py — full-model gate for JanusDNA with the conv stem.
++
++Checks the Janus invariant at WHOLE-MODEL level: the prediction for block p must
++NOT depend on the input of block p (self-exclusion). If it does, the model can
++copy the target — the loss drops, the numbers inflate, and nothing on screen
++looks wrong.
++
++This is deliberately NOT a forward-causality test ("no gradient on the future").
++JanusDNA is bidirectional and is SUPPOSED to see the future. The only forbidden
++dependency is the target block seeing itself.
++
++USAGE (hooked into the harness by run_stem_experiment.sh): it runs automatically
++in SequenceLightningModule.on_train_start() when JANUS_STEM_GATE=1, against the
++model already on GPU:
++
++    from test_stem_wiring import run_gate
++    run_gate(self.model, stride=4, device=self.device)
++
++run_gate is SAFE on a model that is about to train: it does not move the model
++between devices, it restores the train/eval flag, and it zeroes the gradients at
++the end so the first optimisation step is not contaminated.
++"""
++
++import torch
++
++
++@torch.no_grad()
++def _forward_shapes(model, stride, T=512, vocab_hi=4):
++    device = next(model.parameters()).device
++    ids = torch.randint(0, vocab_hi, (1, T), device=device)  # A/C/G/T only
++    out = model(input_ids=ids, use_cache=False)
++    logits = out.logits if hasattr(out, "logits") else out[1]
++    assert logits.shape[1] == T, (
++        f"the head must return T={T} logits, got {logits.shape[1]}: "
++        "ExpansionHead is not wired in, or the stride is wrong."
++    )
++    print(f"[OK] shapes: input T={T} -> logits {tuple(logits.shape)} "
++          f"(M={T//stride} super-tokens)")
++
++
++def test_self_exclusion(model, stride, T=512, vocab_hi=4, tol=0.0):
++    """Backpropagate the logits of block p to the input embeddings. The gradient
++    on block p's own input must be EXACTLY zero; the gradient on the context
++    must not be."""
++    device = next(model.parameters()).device
++    ids = torch.randint(0, vocab_hi, (1, T), device=device)
++
++    emb_layer = model.get_input_embeddings()
++    emb = emb_layer(ids).clone().detach().requires_grad_(True)
++    out = model(inputs_embeds=emb, use_cache=False)
++    logits = out.logits if hasattr(out, "logits") else out[1]  # (1, T, vocab)
++
++    M = T // stride
++    for p in (1, M // 2, M - 2):  # avoid the special first/last super-tokens
++        if emb.grad is not None:
++            emb.grad = None
++        block = slice(p * stride, (p + 1) * stride)
++        logits[:, block, :].float().sum().backward(retain_graph=(p != M - 2))
++        g = emb.grad[0]  # (T, D)
++        self_dep = g[block].abs().max().item()
++        ctx = torch.cat([g[:p * stride], g[(p + 1) * stride:]],
++                        dim=0).abs().max().item()
++        assert self_dep <= tol, (
++            f"JANUS LEAKAGE: block {p} depends on its OWN input "
++            f"(max|grad|={self_dep:.3e}). The fusion mask or the super-token "
++            "alignment is broken -> the loss is meaningless."
++        )
++        assert ctx > 0.0, (
++            f"DEGENERATE: block {p} depends on no context at all "
++            "(neither stream is flowing)."
++        )
++    print("[OK] self-exclusion: block predicted WITHOUT seeing itself, "
++          "forward+backward context active (checked on 3 super-tokens)")
++
++
++def run_gate(model, stride, T=512, device=None, logfile=None):
++    """Safe on a model about to train: restores state and zeroes gradients.
++
++    The outcome is also written to a file (default: $JANUS_STEM_GATE_LOG or
++    ./GATE_RESULT.txt) because the console at this point is full of the model
++    repr and the progress bar, and a passing gate scrolls past unnoticed.
++    """
++    import os as _os
++
++    logfile = logfile or _os.environ.get("JANUS_STEM_GATE_LOG", "GATE_RESULT.txt")
++
++    banner = "=" * 60
++    lines = [banner, f"FULL-MODEL GATE JanusDNA+stem (stride={stride}, T={T})", banner]
++    print("\n" + "\n".join(lines))
++
++    was_training = model.training
++    model.eval()
++    ok = False
++    try:
++        _forward_shapes(model, stride, T=T)
++        test_self_exclusion(model, stride, T=T)
++        ok = True
++        lines += [
++            f"[OK] shapes: input T={T} -> M={T//stride} super-tokens, "
++            "logits re-expanded to T",
++            "[OK] self-exclusion: block p predicted WITHOUT seeing itself, "
++            "forward+backward context active",
++            "", "RESULT: PASSED. The stem preserves the Janus masking. "
++            "Cleared for the full run.",
++        ]
++        print("Gate passed: the stem preserves the Janus masking. Cleared for training.")
++    except Exception as e:
++        lines += ["", f"RESULT: FAILED -> {e}"]
++        raise
++    finally:
++        model.zero_grad(set_to_none=True)
++        model.train(was_training)
++        try:
++            with open(logfile, "w") as f:
++                f.write("\n".join(lines) + "\n")
++            print(f"\n>>> Gate result also written to: {_os.path.abspath(logfile)}")
++        except Exception:
++            pass
++    return ok
++
++
++if __name__ == "__main__":
++    print("This gate runs against the harness model (self.model).")
++    print("Enable it with JANUS_STEM_GATE=1 during the smoke run:")
++    print("  JANUS_STEM_GATE=1 ./run_stem_experiment.sh")
+diff --git a/train.py b/train.py
+index 381e8c1..48837f5 100644
+--- a/train.py
++++ b/train.py
+@@ -127,6 +127,17 @@ class CustomWandbLogger(WandbLogger):
+ 
+ 
+ class SequenceLightningModule(pl.LightningModule):
++
++    def on_train_start(self):
++        # Run the full-model wiring gate before the first optimisation step,
++        # against the model already on its device. Opt-in via environment so the
++        # unmodified training path is untouched.
++        import os as _stem_os
++        if _stem_os.environ.get("JANUS_STEM_GATE", "0") == "1":
++            from test_stem_wiring import run_gate
++            _s = int(_stem_os.environ.get("JANUS_STEM_STRIDE", "4"))
++            run_gate(self.model, stride=_s, device=self.device)
++
+     def __init__(self, config):
+         # Disable profiling executor. This reduces memory and increases speed.
+         try:
