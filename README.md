@@ -290,7 +290,7 @@ python src/extract_crossdna.py \
   --out      $PENGUIN_ROOT/out/emb_crossdna_81.npz \
   --pooling mean --sdp default --clamp
 
-# JanusDNA
+# JanusDNA — stem-aware automatically, no flag needed
 python src/extract_janusdna.py \
   --repo-path       $JANUSDNA_REPO \
   --model-config    $JANUSDNA_REPO/imported_checkpoint/144_without_midattn_model_config.json \

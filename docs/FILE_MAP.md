@@ -13,7 +13,7 @@ original working directory.
 | `01_data_prep.py` | `src/prepare_windows.py` |
 | `03_extract_crossdna.py` | `src/extract_crossdna.py` |
 | `03_extract_janusdna.py` | `src/extract_janusdna.py` |
-| `03_extract_janusdna_stem.py` | merged into `src/extract_janusdna.py` (`--stem`) |
+| `03_extract_janusdna_stem.py` | merged into `src/extract_janusdna.py` (automatic) |
 | `04_cluster.py` | `src/cluster_embeddings.py` |
 | `05_classify.py` | `src/classify_baselines.py` |
 | `05b_trivial_decompose.py` | `src/decompose_trivial.py` |
