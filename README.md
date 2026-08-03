@@ -461,9 +461,11 @@ on entering a fresh container.
 
 If you use this code, please cite the thesis:
 
-> G. Vignati. *Modelli linguistici del DNA per il genoma di una specie non
-> modello.* Master's thesis, Università Politecnica delle Marche, 2026.
-> Supervisor: Prof. Emiliano Trucchi.
+> G. Vignati. *[THESIS TITLE]*. Master's thesis, Università Politecnica delle
+> Marche, 2026. Supervisor: [SUPERVISOR NAME].
+
+<!-- TODO before publishing: replace [THESIS TITLE] and [SUPERVISOR NAME] here
+     and in CITATION.cff. -->
 
 Machine-readable metadata is in `CITATION.cff`.
 

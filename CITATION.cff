@@ -16,7 +16,7 @@ keywords:
   - LoRA
 references:
   - type: thesis
-    title: "Modelli linguistici del DNA per il genoma di una specie non modello"
+    title: "[THESIS TITLE]"   # TODO: fill in before publishing
     thesis-type: "Master's thesis"
     authors:
       - family-names: Vignati
@@ -24,3 +24,6 @@ references:
     institution:
       name: "Università Politecnica delle Marche"
     year: 2026
+    # TODO: replace before publishing. 'notes' is used because CFF 1.2.0 has no
+    # supervisor field for a thesis reference.
+    notes: "Supervisor: [SUPERVISOR NAME]"
