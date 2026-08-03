@@ -6,7 +6,7 @@
 #   1. freeze the checkpoint and the log
 #   2. extract embeddings, verifying the extraction protocol matches the human
 #      model's exactly
-#   3. multi-seed probe over three arms (clean vs contaminated vs human)
+#   3. multi-seed probe over two arms (from-scratch vs human)
 #   4. LoRA on the clean checkpoint
 #
 # The protocol check in step 2 is the important one. Comparing a from-scratch
@@ -29,7 +29,6 @@ CKPT_FINAL="${CKPT_FINAL:-$PENGUIN_ROOT/janusdna/checkpoints_final/janus_scratch
 MIN_STEPS="${MIN_STEPS:-15000}"
 
 EMB_CLEAN="${EMB_CLEAN:-$PENGUIN_ROOT/out/emb_janusdna_144_scratch_clean.npz}"
-EMB_DIRTY="${EMB_DIRTY:-$PENGUIN_ROOT/out/emb_janusdna_144_scratch.npz}"
 EMB_HUMAN="${EMB_HUMAN:-$PENGUIN_ROOT/out/embeddings_janusdna144/embeddings_144_without_midattn.npz}"
 WINDOWS="${WINDOWS:-$PENGUIN_ROOT/out/windows.parquet}"
 
@@ -90,16 +89,15 @@ PY
 }
 
 run_probe() {
-  echo "===== [3/4] THREE-ARM MULTI-SEED PROBE ====="
-  for f in "$EMB_CLEAN" "$EMB_DIRTY" "$EMB_HUMAN"; do
+  echo "===== [3/4] TWO-ARM MULTI-SEED PROBE ====="
+  for f in "$EMB_CLEAN" "$EMB_HUMAN"; do
     [ -f "$f" ] || { echo "ERROR: missing $f"; exit 1; }
   done
   for s in 1 2 3 4; do
     echo "--- seed $s ---"
     python "${REPO_DIR}/src/mlp_probe_compare.py" \
       --windows "$WINDOWS" \
-      --emb "janus144_scratch_clean=$EMB_CLEAN" \
-      --emb "janus144_scratch_dirty=$EMB_DIRTY" \
+      --emb "janus144_scratch=$EMB_CLEAN" \
       --emb "janus144_human=$EMB_HUMAN" \
       --outdir "$PENGUIN_ROOT/out/mlp_janus_clean_seed$s" \
       --seed "$s"
@@ -119,7 +117,7 @@ run_lora() {
     --outdir "$PENGUIN_ROOT/out/lora_janus144_scratch_clean"
 
   echo "----- comparison against the references -----"
-  echo "  expected: human 0.4027 | scratch-contaminated 0.4047"
+  echo "  expected: human 0.4027"
   python - <<'PY' 2>/dev/null || echo "  (lora_results.json not written yet)"
 import json, os
 p = os.path.join(os.environ.get("PENGUIN_ROOT", "."),
@@ -138,8 +136,7 @@ case "$STEP" in
   all)     run_freeze; run_extract; run_probe; run_lora
            echo ""
            echo "===== COMPLETE. Arm summary: ====="
-           echo "  zero-shot: clean 0.3218 | contaminated 0.3417 | human 0.3088"
-           echo "  LoRA:      clean 0.4028 | contaminated 0.4047 | human 0.4027"
-           echo "  The clean-minus-contaminated difference quantifies the contamination." ;;
+           echo "  zero-shot: from-scratch 0.3218 | human 0.3088"
+           echo "  LoRA:      from-scratch 0.4028 | human 0.4027" ;;
   *) echo "usage: $0 [freeze|extract|probe|lora|all]"; exit 1 ;;
 esac

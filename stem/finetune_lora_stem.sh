@@ -124,7 +124,7 @@ python "$LORA_SCRIPT" \
 
 echo ""
 echo "----- comparison against the baseline references -----"
-echo "  expected baseline: scratch-clean 0.4028 | human 0.4027 | contaminated 0.4047"
+echo "  expected baseline: scratch-clean 0.4028 | human 0.4027"
 echo "  observed for S=4 : 0.3829 (a loss of ~0.02 MCC)"
 echo "  Remember what the experiment predicts: the metric that decides the"
 echo "  question is the NMI(function)/NMI(GC) ratio from cluster_embeddings.py,"

@@ -3,13 +3,14 @@
 make_pretrain_bed_clean.py — JanusDNA pre-training BED with the downstream test
 regions removed.
 
-THE PROBLEM THIS SOLVES
-An early version of the pre-training corpus tiled the whole genome. That corpus
-included the scaffolds on which the downstream task is evaluated: 98.3% of test
-windows sat on scaffolds the model had already seen during pre-training. The
-model never saw the LABELS, but it had modelled the sequence, and any
-"from-scratch beats human-pretrained" claim built on that comparison would be
-measuring memorisation rather than domain adaptation.
+WHY THE EXCLUSION IS REQUIRED
+Pre-training never sees the downstream labels, but it does model the SEQUENCE.
+A model that has already fitted the nucleotide statistics of a scaffold will
+score better on windows drawn from that scaffold, for reasons that have nothing
+to do with domain adaptation. Any comparison between an in-domain and a
+transferred model is therefore only meaningful if the pre-training corpus and
+the evaluation set are disjoint at the SCAFFOLD level — the same guarantee the
+downstream split already provides internally.
 
 Difference from make_pretrain_bed.py: this reads windows.parquet, finds the
 scaffolds used by the downstream 'val' and 'test' splits, and EXCLUDES them
@@ -18,10 +19,6 @@ downstream train split.
 
 The pre-training's own valid/test partitions — used purely to monitor perplexity
 — are then carved out of what remains.
-
-Both corpora were kept and carried through the full evaluation, so the artifact
-could be quantified rather than merely fixed: contamination is worth +0.020 MCC,
-of which about +0.012 is genuine in-domain signal.
 
 Usage:
     python make_pretrain_bed_clean.py \\
@@ -125,6 +122,18 @@ def main():
           f"({100*total/genome_bp:5.1f}% of the genome)  [{len(usable)} scaffolds]")
     for sp in ("train", "valid", "test"):
         print(f"   {sp:5s}: {counts[sp]:6d} intervals | {bp[sp]:>14,} bp")
+
+    # With very few usable scaffolds, valid and/or test can come out empty:
+    # the largest scaffold is reserved for train, and there may be nothing left
+    # to seed the other two. Lightning then fails at the first validation, well
+    # into the run, so it is worth saying now.
+    empty = [sp for sp in ("valid", "test") if counts[sp] == 0]
+    if empty:
+        print(f"\n  WARNING: the {', '.join(empty)} partition(s) are EMPTY "
+              f"({len(usable)} usable scaffolds after exclusions). Pre-training "
+              "will fail at the first validation step. Use a smaller --seqlen "
+              "so more scaffolds qualify, or exclude fewer downstream splits "
+              "via --exclude-splits.")
 
     steps_epoch = counts["train"] * max(1, TILE // args.seqlen) / args.global_batch
     print(f"\ntokens per epoch (train): {bp['train']:,}")

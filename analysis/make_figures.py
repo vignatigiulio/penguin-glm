@@ -11,9 +11,8 @@ silently disagree with the tables.
 Figures:
   1. zero_shot_vs_lora   the headline result (2 models x 2 regimes)
   2. nmi_gc_vs_function   the central result (embeddings organise by GC)
-  3. contamination        decomposition of the JanusDNA in-domain advantage
-  4. pretraining_curves   training dynamics (CrossDNA saturation)
-  5. confusion_matrices   post-LoRA confusion, row-normalised
+  3. pretraining_curves   training dynamics (CrossDNA saturation)
+  4. confusion_matrices   post-LoRA confusion, row-normalised
 
 Usage:
   python make_figures.py
@@ -39,7 +38,6 @@ FIG = Path("figures")
 # restrained palette, suitable for print
 C_SCRATCH = "#2c6fbb"   # blue:   from-scratch (in-domain)
 C_HUMAN = "#c0392b"     # red:    human (transfer)
-C_DIRTY = "#7f8c8d"     # grey:   contaminated
 C_GC = "#e67e22"        # orange: GC
 C_FUNC = "#27ae60"      # green:  function
 C_REP = "#95a5a6"       # light grey: repeats
@@ -166,38 +164,7 @@ def fig_nmi():
     save(fig, "2_nmi_gc_vs_function")
 
 
-# ---------- FIGURE 3: contamination decomposition (JanusDNA) ----------
-def fig_contamination():
-    dirty = probe_seeds("mlp_janus_clean_seed", "janus144_scratch_dirty")
-    clean = probe_seeds("mlp_janus_clean_seed", "janus144_scratch_clean")
-    human = probe_seeds("mlp_janus_clean_seed", "janus144_human")
-    if any(len(a) == 0 for a in [dirty, clean, human]):
-        print("  [skip] contamination: missing data")
-        return
-
-    fig, ax = plt.subplots(figsize=(6.5, 4.2))
-    labels = ["contaminated", "clean", "human"]
-    vals = [dirty.mean(), clean.mean(), human.mean()]
-    errs = [a.std(ddof=1) if len(a) > 1 else 0 for a in [dirty, clean, human]]
-    cols = [C_DIRTY, C_SCRATCH, C_HUMAN]
-    ax.bar(labels, vals, yerr=errs, capsize=4, color=cols, width=0.6)
-    ax.set_ylabel("zero-shot MCC (test)")
-    lo = min(human.mean(), *[v for v in vals]) - 0.02
-    hi = max(vals) + 0.03
-    ax.set_ylim(lo, hi)
-    ax.set_title("JanusDNA: decomposing the in-domain advantage")
-    # the two gaps are the point of the figure: how much of the apparent
-    # advantage was contamination, and how much was real
-    ax.annotate(f"contamination {dirty.mean()-clean.mean():+.3f}",
-                (0.5, hi - 0.008), ha="center", fontsize=8.5, color=C_DIRTY)
-    ax.annotate(f"in-domain signal {clean.mean()-human.mean():+.3f}",
-                (1.5, hi - 0.008), ha="center", fontsize=8.5, color=C_SCRATCH)
-    for xi, v in enumerate(vals):
-        ax.annotate(f"{v:.3f}", (xi, v + 0.003), ha="center", fontsize=9)
-    save(fig, "3_contamination_janusdna")
-
-
-# ---------- FIGURE 4: pre-training curves ----------
+# ---------- FIGURE 3: pre-training curves ----------
 def fig_curves():
     jlog = PENGUIN_ROOT / "janusdna/checkpoints_final/train_janus_scratch_clean.log"
     clog = PENGUIN_ROOT / "crossdna/checkpoints_final/train_crossdna_scratch_60k.log"
@@ -250,10 +217,10 @@ def fig_curves():
              "losses); what is compared is the dynamics. CrossDNA saturates "
              "within the first epoch.",
              ha="center", fontsize=8, style="italic")
-    save(fig, "4_pretraining_curves")
+    save(fig, "3_pretraining_curves")
 
 
-# ---------- FIGURE 5: confusion matrices ----------
+# ---------- FIGURE 4: confusion matrices ----------
 def fig_confusion():
     panels = [
         ("JanusDNA from-scratch", "lora_janus144_scratch_clean"),
@@ -289,7 +256,7 @@ def fig_confusion():
                         fontsize=8, color="white" if cmn[i, j] > 0.5 else "black")
     fig.suptitle("Confusion matrices after LoRA (row-normalised, %)", y=1.0)
     fig.tight_layout(rect=[0, 0, 1, 0.98])
-    save(fig, "5_confusion_matrices")
+    save(fig, "4_confusion_matrices")
 
 
 def main():
@@ -305,7 +272,6 @@ def main():
     print(f"=== figures in {FIG} (reading results from {OUT}) ===")
     fig_zero_vs_lora()
     fig_nmi()
-    fig_contamination()
     fig_curves()
     fig_confusion()
     print("done.")

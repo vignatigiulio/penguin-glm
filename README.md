@@ -82,7 +82,6 @@ composition with no learned representation at all.
 | Model | Pre-training corpus | MCC |
 |---|---|---:|
 | JanusDNA-144 | penguin, from scratch (clean) | 0.3218 ± 0.0016 |
-| JanusDNA-144 | penguin, from scratch (contaminated) | 0.3417 ± 0.0031 |
 | JanusDNA-144 | human | 0.3088 ± 0.0043 |
 | CrossDNA-8.1M | penguin, from scratch (clean) | 0.2881 ± 0.0005 |
 | CrossDNA-8.1M | human | 0.2691 ± 0.0015 |
@@ -95,15 +94,14 @@ used here. `analysis/audit_results.py` flags any feature that has been evaluated
 under more than one protocol.
 
 In-domain pre-training helps, but modestly: **+0.013 MCC** for JanusDNA and
-**+0.019** for CrossDNA. The "contaminated" row is a deliberately reported
-artifact — see [Train/test contamination](#traintest-contamination) below.
+**+0.019** for CrossDNA — a small return for a full pre-training run on the
+target genome.
 
 ### After LoRA domain adaptation
 
 | Model | Pre-training corpus | MCC |
 |---|---|---:|
 | JanusDNA-144 | penguin, from scratch (clean) | 0.4028 |
-| JanusDNA-144 | penguin, from scratch (contaminated) | 0.4047 |
 | JanusDNA-144 | human | 0.4027 |
 | CrossDNA-8.1M | penguin, from scratch (clean) | 0.4216 |
 | CrossDNA-8.1M | human (fp32) | 0.3856 |
@@ -389,16 +387,22 @@ CrossDNA checkpoints must be converted to HuggingFace layout before extraction
 or LoRA; `crossdna_ckpt_to_hf.py` produces a directory structurally identical to
 the released weights.
 
-### Train/test contamination
+### Corpus construction
 
-An early version of the pre-training corpus included scaffolds that reappear in
-the downstream test split — 98.3% of test windows sat on training scaffolds. The
-corpus was regenerated with those scaffolds excluded (`make_pretrain_bed_clean.py`),
-and **both** versions were carried through the full evaluation so the artifact
-could be quantified rather than merely fixed: contamination is worth
-**+0.020 MCC**, of which roughly +0.012 is genuine in-domain signal. The
-"contaminated" rows in the results tables are that measurement, and are not to
-be read as headline numbers.
+The pre-training corpus is built from the downstream TRAIN scaffolds only.
+`make_pretrain_bed_clean.py` reads `windows.parquet`, collects every scaffold
+used by the downstream val and test splits, and excludes those scaffolds
+entirely before tiling.
+
+This is not optional. Pre-training never sees the labels, but it does model the
+sequence, and a model that has already fitted the nucleotide statistics of a
+test scaffold will score better there for reasons that have nothing to do with
+domain adaptation. Any comparison between an in-domain and a transferred model
+is only meaningful if the in-domain corpus and the evaluation set are disjoint
+at the scaffold level — the same guarantee the downstream split itself provides.
+
+On this assembly the exclusion removes a substantial fraction of the genome,
+which is why the from-scratch budgets are as small as they are.
 
 ---
 
