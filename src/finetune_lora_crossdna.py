@@ -140,6 +140,15 @@ def main():
     os.makedirs(args.outdir, exist_ok=True)
 
     import torch
+
+    # Before transformers, and therefore before fla: fla/ops/attn/parallel.py
+    # applies @torch.compile at module scope and the inductor shipped with this
+    # torch is incompatible with Triton 3.2.0. install() does this too, but it
+    # runs after the model is loaded, which is too late.
+    if hasattr(torch, "compile"):
+        torch.compile = (lambda fn=None, *a, **k:
+                         (fn if fn is not None else (lambda g: g)))
+
     import torch.nn as nn
     from transformers import AutoModelForMaskedLM
     from sklearn.preprocessing import LabelEncoder

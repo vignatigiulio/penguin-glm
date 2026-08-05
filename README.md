@@ -147,48 +147,136 @@ Three things are worth reading off this table.
 ## The causal convolutional stem experiment
 
 **Question.** Is the GC attractor a consequence of single-nucleotide
-tokenisation? If the model reasons over ~19 bp super-tokens instead of single
-bases, does the latent space stop being organised by composition?
+tokenisation? If the model reasons over super-tokens instead of single bases,
+does the latent space stop being organised by composition?
 
-**Design.** A causal downsampling stem — two stride-2 stages, kernel 7,
-receptive field ≈ 19 bp — inserted before the JanusDNA Mamba+MoE backbone.
-Three architectural invariants were verified before the run: the backward stream
-uses flip-based weight tying (one stem, not two), the Janus loss is non-shifted,
-and LayerNorm is per-position and therefore causally safe. A full-model gate
-(`stem/test_stem_wiring.py`) confirms that the stem preserves the Janus
-self-exclusion masking.
+**Design.** A causal down-sampling stem — stride-2 stages of kernel 7 — inserted
+before the JanusDNA Mamba+MoE backbone, giving compression S with a receptive
+field of roughly 5S bp. Three architectural invariants were verified before any
+run: the backward stream uses flip-based weight tying (one stem, not two), the
+Janus loss is non-shifted, and LayerNorm is per-position and therefore causally
+safe. A standalone gate proves causality through the Jacobian, and a full-model
+gate (`stem/test_stem_wiring.py`) confirms the stem preserves Janus
+self-exclusion.
 
 **Falsifiable prediction, stated in advance.** An improvement in the
 NMI(function)/NMI(GC) *ratio* would indicate a mechanistic gain; an improvement
 in MCC alone would indicate a merely computational one.
 
-**Result (S = 4, against the from-scratch clean baseline):**
+**Budget.** Identical for every scale: ~52B tokens, `max_length=131072`,
+50,000 steps, `global_batch=8`, `lr=8e-3`, bf16-mixed, one H100.
 
-| Metric | baseline | + conv stem | change |
-|---|---:|---:|---|
-| NMI vs. function | 0.0462 | 0.0581 | +26% |
-| NMI vs. GC | 0.4038 | 0.2590 | **−36%** |
-| ratio function/GC | 0.115 | 0.224 | **+95%** |
-| Silhouette | 0.199 | 0.462 | +132% |
-| Zero-shot MCC | 0.3232 | 0.3238 | +0.0006 |
-| LoRA MCC | 0.4028 | 0.3829 | **−0.0199** |
+### Sweep over the compression scale
 
-By the prediction as stated: **mechanistic gain without computational gain.**
-The stem measurably weakens the GC attractor — the ratio nearly doubles and the
-clusters become far better separated — but none of that converts into downstream
-accuracy, and under LoRA it costs about 0.02 MCC. Reported as a negative result
-on the metric that matters practically, and a positive one on the metric the
-experiment was designed to test.
+| Scale | NMI vs GC | NMI vs function | ratio f/GC | silhouette | zero-shot MCC | LoRA MCC | effective dim |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| baseline (no stem) | 0.4038 | 0.0462 | 0.114 | 0.199 | 0.3232 | **0.403** | 3 |
+| **S = 4** (~19 bp) | 0.2591 | **0.0581** | **0.224** | **0.462** | **0.3238** | 0.383 | 2 |
+| S = 8 (~40 bp) | 0.2886 | 0.0526 | 0.182 | 0.387 | 0.2920 | 0.360 | 1 |
+| S = 16 (~80 bp) | **0.2187** | 0.0401 | 0.183 | 0.437 | 0.2594 | 0.331 | 1 |
 
-Additional stride variants (S = 8, 16, 32) were pre-trained; their evaluation is
-not included here.
+S = 32 was pre-trained but is excluded from the downstream comparison; see
+[The S = 32 exclusion](#the-s--32-exclusion).
 
-The patch in `stem/janusdna_stem.patch` applies to JanusDNA at commit
-`3f44954` (2025-08-29). It touches four files: `train.py`,
-`janusdna/modeling_janusdna.py`, and two new files
-(`janusdna/causal_conv_stem.py`, `test_stem_wiring.py`).
+**The scales are not equivalent, and S = 4 is an optimum.** Three readings:
 
----
+1. **Extractability degrades monotonically with compression**, in both regimes:
+   zero-shot 0.324 → 0.292 → 0.259, post-LoRA 0.383 → 0.360 → 0.331. Only S = 4
+   matches the baseline zero-shot.
+2. **The gap from the baseline widens with S even after adaptation.** At S = 4
+   fine-tuning reabsorbs the difference (0.383 against 0.403, within variance);
+   at S = 8 and S = 16 it no longer does. The distinction is substantive: at
+   S = 4 the information is present but reorganised, beyond it the information
+   is lost in the compression and in-domain adaptation does not recover it.
+3. **Reducing GC is not the same as improving.** S = 16 weakens the GC attractor
+   more than any other scale (0.2187, −46% from baseline) and loses on
+   everything else, including the lowest NMI vs function of the whole sweep. It
+   is flattening the representation, not purifying it.
+
+The ratio declared in advance as the discriminating metric picks out S = 4
+(0.224) clearly over S = 8 and S = 16 (both ~0.18).
+
+### Why S = 16 wins on GC and loses on everything else
+
+| Scale | var. PC1 | eff. dim (80%) | PC2 corr. GC | mean corr. GC | LDA η² | LDA acc. |
+|---|---:|---:|---:|---:|---:|---:|
+| baseline | 0.659 | 3 | 0.880 | 0.399 | 0.4035 | 0.465 |
+| **S = 4** | 0.672 | 2 | **0.739** | 0.355 | **0.4064** | 0.462 |
+| S = 8 | 0.807 | **1** | 0.908 | 0.286 | 0.3654 | 0.445 |
+| S = 16 | 0.809 | **1** | 0.928 | 0.240 | 0.3039 | 0.420 |
+
+Two facts contradict any extrapolation from NMI alone. **PC2's correlation with
+GC rises** for S = 8 and S = 16 (0.908, 0.928 against the baseline's 0.880): the
+dominant axis becomes *more* GC-centric, not less. And **the representation
+collapses**: PC1 alone explains 81% of the variance and the effective
+dimensionality falls to one.
+
+The unifying explanation is that at high compression GC becomes less *diffuse*
+(mean correlation 0.286 and 0.240) but more *concentrated* in the dominant axis.
+It is not attenuated, it is compressed into a single direction along with
+everything else. The falling NMI vs GC at S = 16 is therefore a symptom of an
+impoverished representation, not of a purified one.
+
+This also resolves the otherwise odd combination of high silhouette with falling
+NMI against every measured variable: if the representation flattens onto one
+axis, the points line up and k-means separates them by construction, with no
+biological correspondence. Better-looking clusters, less information.
+
+**S = 4 is the only scale that reorganises without collapsing**: it keeps
+dimensionality, reduces the GC axis, and preserves the baseline's linear
+extractability (LDA η² 0.4064 against 0.4035).
+
+### Verdict against the prediction
+
+At S = 4, **mechanistic gain without computational gain**. The stem measurably
+weakens the GC attractor — the function/GC ratio nearly doubles, the clusters
+separate far better — and none of it converts into downstream accuracy, while
+under LoRA it costs about 0.02 MCC. That is a negative result on the metric that
+matters practically, and a positive one on the metric the experiment was
+designed to test. Beyond S = 4 both gains disappear together.
+
+**Consequence for the multi-scale idea.** The premise of an Inception-style
+multi-scale stem holds — the scales do behave differently — but the data show no
+*complementarity*: no scale captures function better than the others, and all
+degrade as S grows. A module fusing S ∈ {4, 8, 16} would combine one good
+extractor with two that degrade extractability. The remaining argument would be
+that learned weights could select the best scale, and in that case the sweep has
+already given the answer at far lower cost.
+
+### The S = 32 exclusion
+
+With 1000 bp windows the compressed grid falls to M = 32, below FlexAttention's
+floor of M ≥ 64 (JanusDNA's `final_attention` sets `q_len = 2M` against a default
+`BLOCK_SIZE` of 128). Two routes around it were tested, and both were subjected
+to a neutrality gate rather than assumed:
+
+- **Lowering `BLOCK_SIZE`** (`stem/gates/gate_flexblock_neutrality.sh`) —
+  **rejected**. Minimum per-row cosine 0.937, 21% relative difference. It is not
+  a re-tiling of the same computation in this build.
+- **Padding to 64·S** (`stem/gates/test_impatto_padding.sh`) — **neutral at
+  2.4%** (S = 16 → 1024: NMI vs GC unchanged to four decimals), **not neutral at
+  51%** (S = 32 → 2048: NMI vs GC moves 5.1%, comparable to the effect under
+  study).
+
+So S = 16 is included with validated padding and S = 32 is excluded. Its
+pre-training is valid and its losses are reported, but no downstream number from
+it would be comparable with the rest.
+
+Note the division of labour between the two padding gates. The vector-level gate
+gives 0.9956 at 2.4% — below its own 0.9999 threshold, so it does not clear
+S = 16 on its own. What cleared S = 16 is the metric-level test: the vectors move
+slightly, the conclusions do not. Testing the quantity the argument rests on,
+rather than a proxy for it, is what made the difference.
+
+### Applying the patch
+
+`stem/janusdna_stem.patch` applies to JanusDNA at commit `3f44954` (2025-08-29).
+It touches four files: `train.py`, `janusdna/modeling_janusdna.py`, and two new
+files (`janusdna/causal_conv_stem.py`, `test_stem_wiring.py`).
+
+The downstream scripts in `src/` are stem-aware without a flag: they detect the
+resolution mismatch, compress the attention mask accordingly, and pad the input
+to `max(64·S, ceil(L/S)·S)`. With no stem the code path is unchanged.
 
 ## Repository layout
 
@@ -300,11 +388,21 @@ python src/extract_janusdna.py \
   --output          $PENGUIN_ROOT/out/emb_janusdna_144.npz
 ```
 
-For the 519M checkpoint and for any from-scratch checkpoint, add `--amp-fp32
---sdpa-patch`: those configurations overflow under the model's internal bf16
-autocast. `--clamp` also exists, but it is a diagnostic rather than a fix — it
-zeroes non-finite values and reports how many there were, and any run with a
-non-zero count should be treated as failed rather than used.
+The larger checkpoints need help. Two mechanisms are available and they are not
+equivalent:
+
+- `--amp-fp32 --sdpa-patch` forces the attention into fp32. Use this where it
+  suffices — it changes precision, not values.
+- `--clamp` zeroes non-finite values and COUNTS them. It is a containment
+  measure, not a fix: the count is written into the `.npz` metadata
+  (`clamp_fraction`) and must be reported alongside any result derived from
+  that file.
+
+**The 519M results in this repository were produced with `--sdp default
+--clamp`, in bf16.** On a short check the same checkpoint clamps on the order of
+2-3% of the values it inspects, so a non-trivial fraction of the intermediate
+activations behind those embeddings were zeroed rather than computed. The
+numbers are reported as measured; the caveat travels with them.
 
 Sanity-check the result before spending GPU time downstream:
 
@@ -420,6 +518,15 @@ These are environment-specific traps, each of which cost real debugging time.
 | `row[0]` returns the wrong thing | pandas ≥ 2 changed positional indexing | use `row.iloc[0]` |
 | ~15% non-finite values in CrossDNA embeddings | fp32 overflow with the `math` SDP implementation | pass `--sdp default`; the fp32 attention replacement lives in `env/patches/sdpa_fp32.py` |
 | CrossDNA-519M dtype mismatch `bf16 vs fp32` | autocast bf16 is incompatible with the `fla` kernels | extract in fp32, no autocast |
+| CrossDNA-519M zeroes 2-3% of inspected values under `--clamp`, even with fp32 attention | residual instability of the checkpoint | report `clamp_fraction` from the `.npz` metadata with any 519M result |
+| CrossDNA returns NaN in bf16 for some batch sizes, with the ORIGINAL flash-attn and no patches | numerical fragility of the upstream model in bf16: on the 8.1M checkpoint, splitting a batch of 64 into two of 32 is enough to produce non-finite values upstream of the attention. `tools/certify_fp32_patch.py` reproduces it as its control run. | run in fp32 (`--amp-fp32 --sdpa-patch`), which is what this pipeline does throughout |
+| `device-side assert` in the Triton kernel for S=16/32 | the compressed grid falls below FlexAttention's floor: `q_len = 2M` against `BLOCK_SIZE = 128` needs M ≥ 64 | pad the input to 64·S, and validate the padding on the METRICS (`stem/gates/`) rather than assuming it |
+| `AssertionError: T=1000 not divisible by S` | 1000 is not a multiple of 16 or 32 | right-padding inside `encode()`, marked invalid in the mask. It must live in `encode()`, not in the forward: the probe that determines the hidden width calls `encode()` too, and padding downstream leaves that first call unpadded |
+| A shell script continues after a Python crash | `set -e` sees the exit code of `tee`, not of the command feeding it | add `set -o pipefail` |
+| `RuntimeError: size of tensor a (250) must match tensor b (1000)` | pooling a super-token-resolution hidden state against a nucleotide-resolution mask | compress the mask: a super-token is valid if its block holds at least one real position |
+| A stem checkpoint silently loads into a model built without the stem | `load_state_dict(strict=False)` ignores the `stem.*` weights without error | gate on `missing`/`unexpected` before every extraction and fine-tune |
+| Two scales running in parallel destroy each other's patched repo | a shared mount and a `rm -rf` at startup | one patched copy per scale, `JanusDNA_stem_s<N>` |
+| `rsync: command not found` in the container | minimal image | fall back to `cp -a` plus pruning of `.git`/`wandb`/`*.ckpt` |
 | Lightning resumes an already-finished run | a stale `last.ckpt` in the output directory | wipe the smoke-test directory before the real run |
 | `fsspec_exists()` crashes on `train.ckpt=null` | Hydra passes the literal `null` | pass a non-existent path string instead |
 

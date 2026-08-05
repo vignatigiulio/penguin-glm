@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -103,8 +104,28 @@ def load_model_and_tokenizer(repo_path: Path, model_config_path: Path,
     return model, tokenizer, config
 
 
+def stem_pad_target(L: int, S: int, forced: int = 0) -> int:
+    """Length the input must be padded to when a stem of stride S is active.
+
+    Two constraints, not one:
+      * L must be a multiple of S, or the stem's assertion fires (1000 is not a
+        multiple of 16 or 32);
+      * the compressed grid M = L/S must satisfy M >= 64, because JanusDNA's
+        final_attention sets q_len = 2M and FlexAttention's default BLOCK_SIZE
+        is 128.
+
+    Hence max(64*S, ceil(L/S)*S). The padding is NOT free: it was validated by
+    measuring its effect on the downstream metrics, not assumed harmless.
+    At 2.4% (S=16, 1000 -> 1024) NMI vs GC is unchanged to four decimals; at 51%
+    (S=32, 1000 -> 2048) it moves by 5.1%, comparable to the effect under study,
+    which is why S=32 is excluded rather than padded.
+    """
+    return forced if forced > 0 else max(64 * S, ((L + S - 1) // S) * S)
+
+
 @torch.no_grad()
-def embed_batch(model, tokenizer, seqs, device, add_special_tokens=False):
+def embed_batch(model, tokenizer, seqs, device, add_special_tokens=False,
+                stem_stride=1, pad_to=0):
     enc = tokenizer(
         seqs,
         add_special_tokens=add_special_tokens,
@@ -115,12 +136,27 @@ def embed_batch(model, tokenizer, seqs, device, add_special_tokens=False):
         return_attention_mask=True,
     )
     input_ids = enc["input_ids"].to(device)
+    attn_in = enc["attention_mask"].to(device)
+
+    if stem_stride > 1:
+        L = input_ids.size(1)
+        target = stem_pad_target(L, stem_stride, pad_to)
+        if target > L:
+            pad_id = getattr(tokenizer, "pad_token_id", None)
+            if pad_id is None:
+                pad_id = 0
+            # Padded on the RIGHT, and marked invalid in the mask, so the added
+            # positions never enter the mean pooling.
+            input_ids = torch.nn.functional.pad(input_ids, (0, target - L),
+                                                value=pad_id)
+            attn_in = torch.nn.functional.pad(attn_in, (0, target - L), value=0)
+    enc = {"input_ids": input_ids, "attention_mask": attn_in}
 
     # hidden_states: (B, L, hidden_size) — already fused bidirectionally by
     # JanusDNAModel, so no separate forward/backward handling is needed here.
     hidden_states, moe_loss = model(input_ids, return_dict=False)
 
-    attn_mask_in = enc["attention_mask"].to(device)  # (B, L) at INPUT resolution
+    attn_mask_in = enc["attention_mask"]  # (B, L) at INPUT resolution
 
     L_in = attn_mask_in.shape[1]
     L_h = hidden_states.shape[1]
@@ -165,7 +201,19 @@ def main():
                         help="append the trailing [SEP] (default: bare sequence)")
     parser.add_argument("--limit", type=int, default=None,
                         help="process only the first N windows (smoke test)")
+    parser.add_argument("--stem-stride", type=int, default=None,
+                        help="stem stride S. Defaults to $JANUS_STEM_STRIDE when "
+                             "$JANUS_STEM=1, otherwise 1 (no stem).")
+    parser.add_argument("--pad-to", type=int, default=0,
+                        help="force the padded length instead of computing it")
     args = parser.parse_args()
+
+    if args.stem_stride is None:
+        args.stem_stride = (int(os.environ.get("JANUS_STEM_STRIDE", "1"))
+                            if os.environ.get("JANUS_STEM") == "1" else 1)
+    if args.stem_stride > 1:
+        print(f"[stem] stride S={args.stem_stride}, inputs padded to "
+              f"{stem_pad_target(1000, args.stem_stride, args.pad_to)} for L=1000")
 
     model, tokenizer, config = load_model_and_tokenizer(
         args.repo_path, args.model_config, args.checkpoint, args.device
@@ -194,7 +242,8 @@ def main():
     for i in tqdm(range(0, len(seqs), args.batch_size), desc="JanusDNA embedding"):
         batch_seqs = seqs[i:i + args.batch_size]
         emb = embed_batch(model, tokenizer, batch_seqs, args.device,
-                          args.add_special_tokens)
+                          args.add_special_tokens,
+                          stem_stride=args.stem_stride, pad_to=args.pad_to)
         all_embeddings.append(emb)
 
     embeddings = np.concatenate(all_embeddings, axis=0)
@@ -210,6 +259,7 @@ def main():
         "n_windows": int(embeddings.shape[0]),
         "pooling": "mean",
         "add_special_tokens": bool(args.add_special_tokens),
+        "stem_stride": int(args.stem_stride),
     }
     save_embeddings(str(args.output), df["id"].to_numpy().astype(str),
                     embeddings.astype(np.float32), meta)

@@ -14,7 +14,9 @@
 set -u
 
 : "${PENGUIN_ROOT:=$HOME/penguin_glm}"
-: "${CONDA_ENV:=crossdna}"
+# Environment names are case-sensitive and differ between machines: try the
+# configured name first, then the common case variants, before giving up.
+: "${CONDA_ENV:=CrossDNA}"
 : "${CONDA_PREFIX_ROOT:=/opt/conda}"
 
 export PENGUIN_ROOT
@@ -23,11 +25,24 @@ export HYDRA_FULL_ERROR=1
 # --------------------------------------------------------------------------- #
 # 1. conda
 # --------------------------------------------------------------------------- #
-if [ -f "$CONDA_PREFIX_ROOT/etc/profile.d/conda.sh" ]; then
-  echo ">> activating conda env: $CONDA_ENV"
+if [ -n "${CONDA_DEFAULT_ENV:-}" ] && [ "${CONDA_DEFAULT_ENV}" != "base" ]; then
+  echo ">> conda env already active: ${CONDA_DEFAULT_ENV} (leaving it alone)"
+elif [ -f "$CONDA_PREFIX_ROOT/etc/profile.d/conda.sh" ]; then
   # shellcheck disable=SC1091
   source "$CONDA_PREFIX_ROOT/etc/profile.d/conda.sh"
-  conda activate "$CONDA_ENV" || echo "   !! could not activate $CONDA_ENV"
+  activated=""
+  for name in "$CONDA_ENV" "$(echo "$CONDA_ENV" | tr 'A-Z' 'a-z')" \
+              "$(echo "$CONDA_ENV" | tr 'a-z' 'A-Z')"; do
+    if conda activate "$name" 2>/dev/null; then
+      echo ">> activated conda env: $name"
+      activated="$name"
+      break
+    fi
+  done
+  if [ -z "$activated" ]; then
+    echo "   !! could not activate '$CONDA_ENV' or its case variants."
+    echo "      available: $(conda env list 2>/dev/null | awk 'NR>2 && NF {print $1}' | tr '\n' ' ')"
+  fi
 fi
 
 # --------------------------------------------------------------------------- #
@@ -88,9 +103,19 @@ echo ">> environment check:"
 python - <<'PY'
 import torch
 print("   torch", torch.__version__, "| cuda", torch.version.cuda)
+
+# torch.compile MUST be neutralised before importing fla, exactly as every
+# script in src/ and tools/ does. fla/ops/attn/parallel.py applies the decorator
+# at module scope and the inductor here is incompatible with Triton 3.2.0.
+# Importing fla without this raises "must be called with a dataclass type or
+# instance" — a failure of the check, not of the environment. Reporting it as
+# an error would send someone debugging a healthy install.
+if hasattr(torch, "compile"):
+    torch.compile = (lambda fn=None, *a, **k:
+                     (fn if fn is not None else (lambda g: g)))
 try:
     import fla, fla.modules, fla.layers.comba  # noqa: F401
-    print("   fla + comba: OK")
+    print("   fla + comba: OK (with torch.compile neutralised, as the scripts do)")
 except Exception as e:
     print("   fla: ERROR ->", e)
 try:

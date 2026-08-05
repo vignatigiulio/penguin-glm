@@ -46,6 +46,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "env" / "patches
 
 BASE = {"A": 0, "C": 1, "G": 2, "T": 3, "N": 4}
 CLAMP = {"nonfinite": 0, "checked": 0, "calls": 0}
+# Per-tensor accounting. An aggregate percentage cannot distinguish scattered
+# rounding noise from one specific intermediate dying completely and always —
+# and those call for very different statements about the results.
+CLAMP_BY_NAME = {}
 
 
 def force_fp32_amp(model):
@@ -78,8 +82,24 @@ def install_clamp(model):
             nb = int((~torch.isfinite(x)).sum())
             CLAMP["calls"] += 1
             CLAMP["checked"] += x.numel()
+            rec = CLAMP_BY_NAME.setdefault(
+                name or "?", {"calls": 0, "hits": 0, "nonfinite": 0,
+                              "checked": 0, "full": 0, "at": []})
+            # Ordinal within this name. ensure_finite carries no layer index, so
+            # the call order is the only handle on WHICH layer failed — and
+            # "one attention layer out of 24 is dead" is a very different
+            # statement from "1.3% of values are noisy".
+            ordinal = rec["calls"]
+            rec["calls"] += 1
+            rec["checked"] += x.numel()
             if nb:
                 CLAMP["nonfinite"] += nb
+                rec["hits"] += 1
+                rec["nonfinite"] += nb
+                if nb == x.numel():
+                    rec["full"] += 1   # the ENTIRE tensor was non-finite
+                if len(rec["at"]) < 40:
+                    rec["at"].append(ordinal)
                 x.nan_to_num_(nan=0.0, posinf=0.0, neginf=0.0)
         except Exception:
             pass
@@ -183,6 +203,16 @@ def main():
                 dtype="fp32", sdp=args.sdp, amp_fp32=bool(args.amp_fp32),
                 sdpa_patch=bool(args.sdpa_patch), clamp=bool(args.clamp),
                 dim=int(X.shape[1]), n=int(X.shape[0]))
+    if args.clamp:
+        # The COUNT belongs in the file, not only in the log. Recording that
+        # clamping was enabled says nothing about whether it fired; without the
+        # number, an .npz produced with a substantial fraction of its
+        # intermediates zeroed is indistinguishable from a clean one, months
+        # later, when the log is gone.
+        meta["clamp_nonfinite"] = int(CLAMP["nonfinite"])
+        meta["clamp_checked"] = int(CLAMP["checked"])
+        meta["clamp_fraction"] = (CLAMP["nonfinite"] / CLAMP["checked"]
+                                  if CLAMP["checked"] else 0.0)
     save_embeddings(args.out, ids, X, meta)
 
     # ---------------------------------------------------------------- #
@@ -204,6 +234,34 @@ def main():
         frac = CLAMP["nonfinite"] / max(CLAMP["checked"], 1)
         print(f"[clamp] non-finite values zeroed: {CLAMP['nonfinite']:,} of "
               f"{CLAMP['checked']:,} ({frac:.2e})")
+        hit = {k: v for k, v in CLAMP_BY_NAME.items() if v["hits"]}
+        if hit:
+            print(f"[clamp] {len(hit)} of {len(CLAMP_BY_NAME)} guarded tensors "
+                  "were affected:")
+            print(f"        {'tensor':28} {'calls':>7} {'hit':>7} {'fully NaN':>10} "
+                  f"{'fraction':>10}")
+            for k, v in sorted(hit.items(), key=lambda kv: -kv[1]["nonfinite"]):
+                f = v["nonfinite"] / max(v["checked"], 1)
+                print(f"        {k[:28]:28} {v['calls']:7d} {v['hits']:7d} "
+                      f"{v['full']:10d} {f:10.2e}")
+            for k, v in sorted(hit.items()):
+                if v["at"]:
+                    print(f"        {k}: failed at call ordinal(s) "
+                          f"{v['at'][:20]} of {v['calls']} per forward")
+            full = [k for k, v in hit.items() if v["full"] == v["calls"]]
+            allfull = [k for k, v in hit.items() if v["full"] == v["hits"]]
+            if allfull:
+                print(f"        NOTE: {allfull} was non-finite in ITS ENTIRETY "
+                      "whenever it was hit.")
+                print("        A whole intermediate replaced by zeros is a "
+                      "structural failure of one")
+                print("        layer, not rounding noise, and any result from "
+                      "this run has to say so.")
+            if full:
+                print(f"        NOTE: {full} failed on EVERY call.")
+                print("        That is a structural failure of one intermediate, "
+                      "not rounding noise,")
+                print("        and any result from this run has to say so.")
     if args.limit and wps > 0:
         print(f"\nProjected time for 120,000 windows: ~{120000/wps/60:.1f} min "
               f"({120000/wps/3600:.2f} h)")

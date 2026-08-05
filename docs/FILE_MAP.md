@@ -46,6 +46,9 @@ original working directory.
 | `extract_stem.sh` | `stem/extract_stem.sh` |
 | `finetune_lora_stem.sh` | `stem/finetune_lora_stem.sh` |
 | `JanusDNA_stem*/` (4 full repo copies) | `stem/janusdna_stem.patch` |
+| — (new) | `stem/gates/gate_flexblock_neutrality.sh` |
+| — (new) | `stem/gates/gate_padding_neutrality.sh` |
+| — (new) | `stem/gates/test_impatto_padding.sh` |
 
 ## Analysis (`analysis/`)
 
@@ -67,6 +70,9 @@ original working directory.
 | `check_embeddings_sanity.py` | `tools/check_embeddings.py` |
 | `verify_lora_targets.py` | `tools/verify_lora_targets.py` |
 | `certify_patch.py` | `tools/certify_fp32_patch.py` |
+| — (new) | `tools/diagnose_sdpa_patch.py` |
+| — (new) | `tools/test_sdpa_mask.py` |
+| — (new) | `tools/check_weights.py` |
 
 ## Environment (`env/`)
 

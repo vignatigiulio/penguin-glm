@@ -213,6 +213,11 @@ def main():
     ap.add_argument("--limit", type=int, default=0, help="0 = everything; >0 smoke test")
     ap.add_argument("--resume", default="",
                     help="best_lora.pt checkpoint to restart from")
+    ap.add_argument("--stem-stride", type=int, default=None,
+                    help="stem stride S. Defaults to $JANUS_STEM_STRIDE when "
+                         "$JANUS_STEM=1, otherwise 1 (no stem).")
+    ap.add_argument("--pad-to", type=int, default=0,
+                    help="force the padded length instead of computing it")
     ap.add_argument("--overfit-gap", type=float, default=0.08,
                     help="warn when train_MCC - val_MCC exceeds this")
     ap.add_argument("--device", default="cuda")
@@ -229,6 +234,12 @@ def main():
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     dev = args.device if torch.cuda.is_available() else "cpu"
+
+    if args.stem_stride is None:
+        args.stem_stride = (int(os.environ.get("JANUS_STEM_STRIDE", "1"))
+                            if os.environ.get("JANUS_STEM") == "1" else 1)
+    if args.stem_stride > 1:
+        print(f"[stem] stride S={args.stem_stride}")
 
     # ---- data ----
     # Read the whole parquet and select columns in pandas. Projection at the
@@ -275,10 +286,31 @@ def main():
     for nm in inj_names[:12]:
         print("   ", nm)
 
+    def stem_pad_target(L, S, forced=0):
+        """max(64*S, ceil(L/S)*S): the stem needs L divisible by S, and
+        FlexAttention needs M = L/S >= 64 because q_len = 2M against a default
+        BLOCK_SIZE of 128."""
+        return forced if forced > 0 else max(64 * S, ((L + S - 1) // S) * S)
+
     def encode(batch_seqs):
+        # The padding lives HERE, not in forward_logits, because encode() is
+        # also used by the probe that determines hdim: putting it downstream
+        # leaves that first call unpadded and it fails on S=16.
         enc = tokenizer(batch_seqs, add_special_tokens=False, padding=True,
                         return_tensors="pt", return_attention_mask=True)
-        return enc["input_ids"].to(dev), enc["attention_mask"].to(dev)
+        ids = enc["input_ids"].to(dev)
+        am = enc["attention_mask"].to(dev)
+        if args.stem_stride > 1:
+            L = ids.size(1)
+            target = stem_pad_target(L, args.stem_stride, args.pad_to)
+            if target > L:
+                pad_id = getattr(tokenizer, "pad_token_id", None)
+                if pad_id is None:
+                    pad_id = 0
+                # right padding, marked invalid so it never enters the pooling
+                ids = torch.nn.functional.pad(ids, (0, target - L), value=pad_id)
+                am = torch.nn.functional.pad(am, (0, target - L), value=0)
+        return ids, am
 
     # embedding width from a first forward pass
     with torch.no_grad():
@@ -429,6 +461,7 @@ def main():
         json.dump(dict(
             model="janusdna", checkpoint=args.checkpoint,
             pooling=args.pooling,
+            stem_stride=int(args.stem_stride),
             lora=dict(r=args.lora_r, alpha=args.lora_alpha,
                       dropout=args.lora_dropout, injected=n_inj,
                       target_suffixes=list(LORA_TARGET_SUFFIXES)),
