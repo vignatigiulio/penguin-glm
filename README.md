@@ -152,7 +152,8 @@ does the latent space stop being organised by composition?
 
 **Design.** A causal down-sampling stem — stride-2 stages of kernel 7 — inserted
 before the JanusDNA Mamba+MoE backbone, giving compression S with a receptive
-field of roughly 5S bp. Three architectural invariants were verified before any
+field of roughly 5S bp (19 bp at S = 4, measured by Jacobian rather than taken
+from the formula: `stem/verify_theory.py`). Three architectural invariants were verified before any
 run: the backward stream uses flip-based weight tying (one stem, not two), the
 Janus loss is non-shifted, and LayerNorm is per-position and therefore causally
 safe. A standalone gate proves causality through the Jacobian, and a full-model
@@ -164,7 +165,10 @@ NMI(function)/NMI(GC) *ratio* would indicate a mechanistic gain; an improvement
 in MCC alone would indicate a merely computational one.
 
 **Budget.** Identical for every scale: ~52B tokens, `max_length=131072`,
-50,000 steps, `global_batch=8`, `lr=8e-3`, bf16-mixed, one H100.
+50,000 steps, `global_batch=8`, `lr=8e-3`, bf16-mixed, one H100. Note that the
+logged `num_tokens` counts *predictions*, which equals nucleotides only when the
+grid stride matches the predicted block; see
+[Separating grid compression from the objective](#separating-grid-compression-from-the-objective).
 
 ### Sweep over the compression scale
 
@@ -243,6 +247,125 @@ extractor with two that degrade extractability. The remaining argument would be
 that learned weights could select the best scale, and in that case the sweep has
 already given the answer at far lower cost.
 
+### Separating grid compression from the objective
+
+The sweep above leaves a confound. Going from the baseline to the `S = 4` stem
+changes three things at once:
+
+| | grid (per 1000 bp window) | window seen per position | bases predicted |
+|---|---:|---:|---:|
+| baseline | 1000 | 1 | 1 |
+| stem S = 4 | 250 | 19 bp | 4 |
+
+The measured attenuation of the GC attractor is therefore attributable to any of
+the three. The sections above attribute it to the block objective, but the data
+do not license that attribution on their own.
+
+Note also that the `S = 4` stem did **not** see disjoint 4-base blocks. Two
+stride-2 convolutions with kernel 7 give a 19 bp receptive field, so adjacent
+super-tokens overlap by 15 bases. Only the prediction *targets* were disjoint.
+
+**The step-1 run.** Running the same stem at stride 1 restores the baseline grid
+density while holding the receptive field and the objective fixed, which isolates
+grid compression alone. The receptive field is kept at 19 bp with three stride-1
+stages of kernel 7 (`RF = 1 + n_stages·(kernel − 1)`).
+
+| configuration | grid | window | stem parameters |
+|---|---:|---:|---:|
+| stem S = 4 (2 stages k=7, stride 2) | 250 | 19 bp | 291,168 |
+| **step 1 (3 stages k=7, stride 1)** | **1000** | **19 bp** | **436,752** |
+| step 1 (2 stages k=7) | 1000 | 13 bp | 291,168 |
+| step 1 (1 stage k=4) | 1000 | 4 bp | 83,376 |
+
+The two 19 bp configurations differ in depth and parameter count (+0.4% of the
+35.9M total). No two-stage stride-1 stem reaches 19 bp, so this is unavoidable
+and is stated rather than glossed over.
+
+**The exclusion band had to be parametrised.** JanusDNA's self-exclusion comes
+from the offsets in the final fusion (`final_fusion_repos_formasked`, active when
+`layer_fusion_strategy = "pool"`):
+
+```
+fused[p] = hidden[p - 1] + hidden[mid_len + p + BAND]
+```
+
+The forward branch at `p - 1` summarises everything before `p`, the backward
+branch at `p + BAND` everything from `p + BAND` on, and the loss is a plain
+unshifted cross-entropy: the prediction is encoded entirely in these offsets.
+`BAND` is hardcoded to 1 upstream, **in grid cells**. At `S = 4` one cell is
+worth four bases, so the band happened to cover the whole predicted block. At
+stride 1 a cell is worth one base while the block is still four, so three of the
+four target bases would be visible to the backward branch — the model would copy
+rather than predict, with a lower loss, better-looking curves and no error on
+screen.
+
+The parametrisation is `BAND = BLOCK / STRIDE`, applied in the FlexAttention mask
+*and* in the fusion offsets. Patching the mask alone has no effect: the fusion
+keeps picking slot `p + 1` regardless.
+
+Measured on the real model with `stem/verify_leakage_map.py` (T = 256, random
+weights, since self-exclusion is structural and independent of training):
+
+| position | target bases | j = 0 | j = 1 | j = 2 | j = 3 | context |
+|---|---|---:|---:|---:|---:|---:|
+| **BAND = 4 (correct)** | | | | | | |
+| 4 | [4, 8) | 0 | 0 | 0 | 0 | 6.00e+02 |
+| 128 | [128, 132) | 0 | 0 | 0 | 0 | 2.18e+02 |
+| 251 | [251, 255) | 0 | 0 | 0 | 0 | 6.31e+02 |
+| **BAND = 1 (upstream value)** | | | | | | |
+| 4 | [4, 8) | 0 | 3.61e+01 | 6.25e+01 | 8.02e+01 | 6.96e+02 |
+| 128 | [128, 132) | 0 | 3.12e+01 | 5.87e+01 | 8.21e+01 | 1.95e+02 |
+| 251 | [251, 255) | 0 | 6.34e+01 | 1.68e+02 | 3.22e+02 | 5.43e+02 |
+
+Exactly one base out of four stays protected with the old band, and the leakage
+grows with `j`: the base furthest from the forward branch is the one the backward
+branch summarises best. The prediction was confirmed in its structure, not merely
+in its outcome.
+
+**Falsifiable prediction, stated in advance.** If the NMI against GC returns
+towards the baseline 0.404, the attenuation was grid compression and the
+attribution above must be rewritten. If it stays near 0.259, compression is
+irrelevant — but window and objective remain confounded with each other, since
+both separate the baseline from either stem run. Closing that would need a fourth
+cell: stride 1, 19 bp, with a single-base head (`STEM_BLOCK=1`), which the code
+supports unchanged.
+
+**Status: the run is in progress.** Numbers will be added when it completes.
+
+**Measured cost.** 0.77 it/s against 1.61 it/s for `S = 4`, i.e. **2.1x**, not
+the 4x–16x an asymptotic argument suggests (linear in the backbone, quadratic in
+the fusion layer). At `d_model = 144` the model already leaves the GPU underused
+at 32,768 positions, so quadrupling the grid fills the hardware rather than
+multiplying wall-clock time.
+
+**Reading the metrics at stride 1.** Three quantities change meaning and are easy
+to misread:
+
+- **The token counter is inflated 4x.** It counts predictions, not nucleotides:
+  each base is predicted four times, once per offset. Measured on the logs, 160
+  batches report 8.39e7 against 2.10e7 bases actually seen; at `S = 4` the two
+  coincide. Comparing runs on `num_tokens` would stop the step-1 run at a quarter
+  of the data. Parity is on steps, batches and bases, which `MAX_STEPS = 50000`
+  guarantees.
+- **`main_loss` is a mean over 4x predictions.** The marginal distribution of
+  prediction horizons is identical between the two setups — each base gets
+  forward horizon `j+1` and backward horizon `4−j`, uniform over `j = 0..3` — but
+  the quantity is not bits-per-nucleotide in the baseline sense.
+- **The logged perplexity is `exp(main_loss + moe_loss)`**, which includes the
+  router's auxiliary term and is unrelated to nucleotide prediction. On a smoke
+  run: logged 8.788, `exp(total)` 8.788, `exp(main_loss)` 4.081. The meaningful
+  quantity is `exp(main_loss)`; the logged value is inflated by
+  `exp(moe_loss) ≈ 2.15`. This applies to every run in this repository, not only
+  the stride-1 one.
+
+**Validation and test loss run well below training loss** in both runs (`S = 4`
+at the end of training: train 1.140, val 0.588, test 0.293). The pattern is
+identical across runs, so it reflects the scaffold split — the held-out scaffolds
+are easier, presumably richer in repeats — not the tokenisation. Per-window
+variance is large in training too, with single-step losses ranging from 0.14 to
+1.3 within one epoch. `test/loss` is therefore not an absolute yardstick across
+splits, though it remains valid across runs.
+
 ### The S = 32 exclusion
 
 With 1000 bp windows the compressed grid falls to M = 32, below FlexAttention's
@@ -270,13 +393,63 @@ rather than a proxy for it, is what made the difference.
 
 ### Applying the patch
 
-`stem/janusdna_stem.patch` applies to JanusDNA at commit `3f44954` (2025-08-29).
-It touches four files: `train.py`, `janusdna/modeling_janusdna.py`, and two new
-files (`janusdna/causal_conv_stem.py`, `test_stem_wiring.py`).
+Two versions coexist, because the sweep results above were produced by the first
+and should stay reproducible.
+
+`stem/janusdna_stem_v1.patch` applies to JanusDNA at commit `3f44954`
+(2025-08-29) and reproduces the S ∈ {4, 8, 16} runs. It touches four files:
+`train.py`, `janusdna/modeling_janusdna.py`, and two new files
+(`janusdna/causal_conv_stem.py`, `test_stem_wiring.py`).
+
+`stem/run_stem_experiment.sh` is the v2 patcher, used for anything new. It
+applies six patch-or-die modifications to `modeling_janusdna.py` and two to
+`train.py`, and takes three parameters instead of one:
+
+```
+STEM_STRIDE   grid compression      (1 = none)
+STEM_BLOCK    bases predicted per fused position
+STEM_NSTAGES  number of stem stages (stride=1 only; default 2)
+STEM_KERNEL   convolution kernel    (default 7)
+```
+
+`STEM_STRIDE = STEM_BLOCK` reproduces v1 exactly, and this is checked rather than
+asserted: `stem/verify_patches.py` confirms that with `BAND = 1` every
+parametrised expression evaluates to the original constant, and the `S = 4` smoke
+run reproduces the pre-change loss (1.4016 against 1.4061–1.4091 across three
+builds, within the run-to-run spread).
+
+```bash
+# reproduce the v1 S = 4 run
+JANUS_STEM_GATE=1 STEM_STRIDE=4 STEM_BLOCK=4 ./stem/run_stem_experiment.sh
+
+# counter-proof: MUST fail with a leakage assertion
+JANUS_STEM_GATE=1 STEM_STRIDE=1 STEM_BLOCK=4 \
+  JANUS_STEM_BAND_OVERRIDE=1 ./stem/run_stem_experiment.sh
+
+# the step-1 run
+JANUS_STEM_GATE=1 STEM_STRIDE=1 STEM_BLOCK=4 STEM_NSTAGES=3 \
+  ./stem/run_stem_experiment.sh full
+```
 
 The downstream scripts in `src/` are stem-aware without a flag: they detect the
 resolution mismatch, compress the attention mask accordingly, and pad the input
 to `max(64·S, ceil(L/S)·S)`. With no stem the code path is unchanged.
+
+### Verification
+
+| script | needs | what it establishes |
+|---|---|---|
+| `stem/verify_theory.py` | CPU | 44 checks: receptive field measured by Jacobian rather than taken from the formula, causality, flip anti-causality, parameter counts, realignment identity at `STRIDE = BLOCK`, tail truncation, prediction/base ratio, horizon distribution, band arithmetic |
+| `stem/verify_patches.py` | none | the eight patches are present, no diff hunk falls outside the intended regions, and `BAND = 1` reproduces the upstream constants |
+| `stem/verify_leakage_map.py` | GPU | the dependency map above, with and without the correct band |
+| `stem/causal_conv_stem.py` | CPU | standalone stem gate, including the configuration read from the environment |
+| `stem/test_stem_wiring.py` | GPU | full-model self-exclusion, wired into `on_fit_start` so it runs before Lightning's sanity check |
+| `tools/check_stem_config.py` | none | derives stage count, kernel and block from a checkpoint and refuses to proceed if the environment disagrees |
+
+`check_stem_config.py` exists because two mismatches are silent under
+`load_state_dict(strict=False)`: a wrong stage count leaves only four unexpected
+keys, below any reasonable count threshold, and a wrong `BLOCK` changes `BAND`
+without touching a parameter at all.
 
 ## Repository layout
 
@@ -287,7 +460,7 @@ pretrain/       from-scratch pre-training on the penguin genome
 stem/           the causal convolutional stem experiment
 analysis/       figures, aggregation, per-class breakdowns
 tools/          smoke tests and verification utilities
-docs/           file map (old thesis-era names → current names)
+docs/           file map (old thesis-era names → current names), experiment notes
 ```
 
 Everything is driven by a single environment variable:
@@ -527,6 +700,10 @@ These are environment-specific traps, each of which cost real debugging time.
 | A stem checkpoint silently loads into a model built without the stem | `load_state_dict(strict=False)` ignores the `stem.*` weights without error | gate on `missing`/`unexpected` before every extraction and fine-tune |
 | Two scales running in parallel destroy each other's patched repo | a shared mount and a `rm -rf` at startup | one patched copy per scale, `JanusDNA_stem_s<N>` |
 | `rsync: command not found` in the container | minimal image | fall back to `cp -a` plus pruning of `.git`/`wandb`/`*.ckpt` |
+| The exclusion band silently covers only part of the predicted block | `BAND` is hardcoded to 1 **in grid cells**; it matched the block only because one cell was worth one block | parametrise `BAND = BLOCK / STRIDE` in both `create_janus_mask` and `final_fusion_repos_formasked`; patching the mask alone has no effect |
+| A wrong stem stage count or a wrong `BLOCK` passes the weight-loading gate | a missing stage leaves only four unexpected keys, below the threshold; `BAND` is not a parameter at all, so a wrong `BLOCK` produces no mismatch | derive the configuration from the checkpoint with `tools/check_stem_config.py` before rebuilding the model |
+| Logged perplexity looks implausibly high | the harness logs `exp(main_loss + moe_loss)`, including the MoE router's auxiliary term | report `exp(main_loss)`; the logged value is inflated by `exp(moe_loss) ≈ 2.15` |
+| The full-model gate never runs before a shape crash | `on_train_start` fires *after* Lightning's sanity check | wire the gate into `on_fit_start` instead |
 | Lightning resumes an already-finished run | a stale `last.ckpt` in the output directory | wipe the smoke-test directory before the real run |
 | `fsspec_exists()` crashes on `train.ckpt=null` | Hydra passes the literal `null` | pass a non-existent path string instead |
 
@@ -582,7 +759,8 @@ This work builds on two external codebases, neither of which is redistributed
 here:
 
 - **JanusDNA** — the conv-stem experiment is distributed as a patch
-  (`stem/janusdna_stem.patch`) to be applied to an upstream checkout at commit
+  (`stem/janusdna_stem_v1.patch`, plus the v2 patcher in
+  `stem/run_stem_experiment.sh`) to be applied to an upstream checkout at commit
   `3f44954`, not as a fork. JanusDNA itself derives from Caduceus.
 - **CrossDNA** — used unmodified; only the runtime patches in `env/patches/`
   are ours.

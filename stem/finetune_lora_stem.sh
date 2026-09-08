@@ -2,37 +2,55 @@
 # finetune_lora_stem.sh — LoRA fine-tuning of JanusDNA-144 + conv stem,
 # protocol-matched to the baseline.
 #
+#   STEP 0  CONFIGURATION GATE: stem structure derived from the checkpoint and
+#           compared with the environment (see extract_stem.sh for why the
+#           count-based gate in STEP 2 is not sufficient on its own)
 #   STEP 1  smoke run with --limit (stem active)
 #   STEP 2  GATE: weights loaded (~0 mismatch), LoRA injected, dt_proj excluded
 #   STEP 3  full LoRA run (defaults identical to the baseline) + comparison
 #
-# As with extract_stem.sh, the original version generated a stem-aware copy of
-# the fine-tuning script on the fly. src/finetune_lora_janusdna.py now handles
-# the super-token resolution itself, so one script covers both cases.
+# src/finetune_lora_janusdna.py handles the super-token resolution itself, so
+# one script covers both the baseline and the stem.
 #
 # Usage:
-#   bash finetune_lora_stem.sh          # smoke + gate -> full
-#   bash finetune_lora_stem.sh smoke    # smoke + gate only
+#   bash finetune_lora_stem.sh          # smoke + gates -> full
+#   bash finetune_lora_stem.sh smoke    # smoke + gates only
+#   STEM_STRIDE=1 STEM_BLOCK=4 STEM_NSTAGES=3 bash finetune_lora_stem.sh
 set -e
 
 : "${PENGUIN_ROOT:=$HOME/penguin_glm}"
 STEM_STRIDE="${STEM_STRIDE:-4}"
+STEM_BLOCK="${STEM_BLOCK:-$STEM_STRIDE}"
+STEM_KERNEL="${STEM_KERNEL:-7}"
+STEM_NSTAGES="${STEM_NSTAGES:-}"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-if   [ -d "${PENGUIN_ROOT}/JanusDNA_stem_s${STEM_STRIDE}/janusdna" ]; then
-  STEM_REPO="${PENGUIN_ROOT}/JanusDNA_stem_s${STEM_STRIDE}"
-elif [ -d "${PENGUIN_ROOT}/JanusDNA_stem/janusdna" ]; then
-  STEM_REPO="${PENGUIN_ROOT}/JanusDNA_stem"
-else
-  echo "ERROR: no patched repository found (neither JanusDNA_stem_s${STEM_STRIDE} nor JanusDNA_stem)"
+if [ $(( STEM_BLOCK % STEM_STRIDE )) -ne 0 ]; then
+  echo "ERROR: STEM_BLOCK=$STEM_BLOCK is not a multiple of STEM_STRIDE=$STEM_STRIDE."
   exit 1
 fi
+STEM_BAND=$(( STEM_BLOCK / STEM_STRIDE ))
+TAG="s${STEM_STRIDE}_b${STEM_BLOCK}"
 
-RUN_DIR="${RUN_DIR:-${PENGUIN_ROOT}/janusdna_stem/pretrain_scratch/janusdna_stem_s${STEM_STRIDE}_penguin_len-128k_lr-8e-3_step-50000}"
+for cand in "JanusDNA_stem_${TAG}" "JanusDNA_stem_s${STEM_STRIDE}" "JanusDNA_stem"; do
+  if [ -d "${PENGUIN_ROOT}/${cand}/janusdna" ]; then STEM_REPO="${PENGUIN_ROOT}/${cand}"; break; fi
+done
+[ -n "${STEM_REPO:-}" ] || { echo "ERROR: no patched repository found under ${PENGUIN_ROOT}"; exit 1; }
+
+if [ -z "${RUN_DIR:-}" ]; then
+  for cand in "janusdna_stem_${TAG}_penguin_len-128k_lr-8e-3_step-50000" \
+              "janusdna_stem_s${STEM_STRIDE}_penguin_len-128k_lr-8e-3_step-50000"; do
+    if [ -d "${PENGUIN_ROOT}/janusdna_stem/pretrain_scratch/${cand}" ]; then
+      RUN_DIR="${PENGUIN_ROOT}/janusdna_stem/pretrain_scratch/${cand}"; break
+    fi
+  done
+fi
+[ -n "${RUN_DIR:-}" ] || { echo "ERROR: no run directory found; set RUN_DIR explicitly"; exit 1; }
+
 MODEL_CONFIG="${RUN_DIR}/model_config.json"
 CHECKPOINT="${RUN_DIR}/checkpoints/last.ckpt"
 WINDOWS_PARQUET="${WINDOWS_PARQUET:-${PENGUIN_ROOT}/out/windows.parquet}"
-OUTDIR="${PENGUIN_ROOT}/out/lora_janus144_stem_s${STEM_STRIDE}"
+OUTDIR="${PENGUIN_ROOT}/out/lora_janus144_stem_${TAG}"
 SMOKE_OUT="${OUTDIR}_smoke"
 SMOKE_LOG="${SMOKE_OUT}/smoke.log"
 SMOKE_LIMIT=2000
@@ -40,19 +58,31 @@ LORA_SCRIPT="${REPO_DIR}/src/finetune_lora_janusdna.py"
 
 export JANUS_STEM=1
 export JANUS_STEM_STRIDE="${STEM_STRIDE}"
-export JANUS_STEM_KERNEL=7
+export JANUS_STEM_BLOCK="${STEM_BLOCK}"
+export JANUS_STEM_KERNEL="${STEM_KERNEL}"
+[ -n "$STEM_NSTAGES" ] && export JANUS_STEM_NSTAGES="${STEM_NSTAGES}"
 export PYTHONPATH="${STEM_REPO}:${PYTHONPATH:-}"
 MODE="${1:-full}"
-echo ">>> scale S=${STEM_STRIDE} | repo=${STEM_REPO}"
+echo ">>> stride=${STEM_STRIDE} block=${STEM_BLOCK} band=${STEM_BAND} | repo=${STEM_REPO}"
 
 # ---- guards ----
 [ -f "$MODEL_CONFIG" ]    || { echo "ERROR: model_config not found: $MODEL_CONFIG"; exit 1; }
 [ -f "$CHECKPOINT" ]      || { echo "ERROR: checkpoint not found: $CHECKPOINT"; exit 1; }
 [ -f "$WINDOWS_PARQUET" ] || { echo "ERROR: parquet not found: $WINDOWS_PARQUET"; exit 1; }
-[ -d "$STEM_REPO/janusdna" ] || { echo "ERROR: patched repo not found: $STEM_REPO"; exit 1; }
 [ -f "$LORA_SCRIPT" ]     || { echo "ERROR: LoRA script not found: $LORA_SCRIPT"; exit 1; }
 mkdir -p "${OUTDIR}" "${SMOKE_OUT}"
 
+echo "=========================================="
+echo "STEP 0/3: configuration gate (checkpoint vs environment)"
+echo "=========================================="
+python "${REPO_DIR}/tools/check_stem_config.py" \
+    --checkpoint "${CHECKPOINT}" \
+    --stride "${STEM_STRIDE}" \
+    --block "${STEM_BLOCK}" \
+    --kernel "${STEM_KERNEL}" \
+    ${STEM_NSTAGES:+--nstages "${STEM_NSTAGES}"}
+
+echo ""
 echo "=========================================="
 echo "STEP 1/3: LoRA smoke on ${SMOKE_LIMIT} windows (stem active)"
 echo "=========================================="
