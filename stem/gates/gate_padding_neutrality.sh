@@ -15,14 +15,10 @@
 # METHOD. S=8 works both natively (1000 bp, M=125) and padded, so the same
 # windows can be extracted both ways and compared directly.
 #
-# RECORDED OUTCOMES:
-#   1024 (+2.4%) -> min cosine 0.9956   the vectors move slightly
-#   2048  (+51%) -> min cosine 0.631    the vectors move a great deal
-#
-# Note that 0.9956 is below the 0.9999 threshold, so this gate alone does not
-# clear S=16. It answers "do the vectors change?", which is not the question the
-# conclusions rest on. test_impatto_padding.sh asks the one that matters — do
-# the METRICS change — and it is that test which cleared S=16.
+# This gate answers "do the vectors change?", which is not the question the
+# conclusions rest on. test_impatto_padding.sh asks the one that matters (do
+# the METRICS change?), and it is that test which decides whether a scale can
+# be padded.
 #
 # Usage:
 #   bash gate_padding_neutrality.sh [PAD_TO]     # default 1024

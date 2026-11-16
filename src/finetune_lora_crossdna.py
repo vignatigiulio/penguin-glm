@@ -9,7 +9,12 @@ STRATEGY
     here, because the backbone receives no gradients on its own weights.
   * LoRA adapters (r=8, alpha=16, dropout=0.05) on the q/k/v/o projections of
     both the Comba mixer and the sliding-window attention transformer, in BOTH
-    branches (A and B) — 384 projections, 0.609% of parameters.
+    branches (A and B): 192 projections and 3,149,828 trainable parameters out
+    of 522,172,165 for the 519M, 96 projections and 344,580 parameters for the
+    8.1M. Name matching also reaches the teacher EMA copy of the model, which
+    only serves pre-training and never runs here: those adapters get no gradient
+    and contribute nothing, but the raw count includes them (192 modules and
+    688,644 parameters for the 8.1M). Both counts are printed and saved.
   * A linear classification head on the mean-pooled embedding.
   * Only the adapters and the head are trained. Gradient clipping throughout.
 
@@ -21,12 +26,12 @@ required, because protocol parity across checkpoints matters more than saving
 time on the ones that happen to be stable in bf16. The from-scratch checkpoint
 produces non-finite values without it.
 
-    Anything that later re-evaluates these adapters MUST apply the same patch.
-    Evaluating fp32-trained adapters on the native bf16 path cost 0.03 MCC on
-    the 519M checkpoint — see the note in the README.
+    Anything that later re-evaluates these adapters MUST apply the same patch:
+    fp32-trained adapters evaluated on the native bf16 path give a lower MCC.
 
-Reference points on the same windows: k-mer baseline MCC ~0.243; best zero-shot
-probe 0.289.
+Reference points on the same windows: 4-mer composition MCC 0.243 with a random
+forest, 0.301 with the same MLP probe used for the embeddings
+(src/kmer_mlp_baseline.py); zero-shot probe on CrossDNA-519M 0.288.
 
 Usage — smoke test first, then the full run:
 
@@ -216,6 +221,19 @@ def main():
     n_tot = sum(p.numel() for p in model.parameters())
     print(f"trainable parameters: {n_train:,} of {n_tot:,} "
           f"({100*n_train/n_tot:.3f}%)")
+    # The teacher EMA copy ("_ema" in the parameter name) receives adapters too,
+    # because injection matches projection names, but it never runs during
+    # adaptation. The effective counts leave it out; the raw ones are kept
+    # unchanged so that older result files stay comparable.
+    named = list(model.named_parameters())
+    lora_modules = {n.split(".lora_")[0] for n, _ in named if ".lora_" in n}
+    n_inj_eff = sum(1 for m in lora_modules if "_ema" not in m)
+    n_train_eff = (sum(p.numel() for n, p in named
+                       if p.requires_grad and "lora_" in n and "_ema" not in n)
+                   + sum(p.numel() for p in head.parameters()))
+    n_tot_eff = sum(p.numel() for n, p in named if "_ema" not in n)
+    print(f"  effective, teacher EMA copy excluded: {n_inj_eff} projections, "
+          f"{n_train_eff:,} of {n_tot_eff:,} ({100*n_train_eff/n_tot_eff:.3f}%)")
 
     opt = torch.optim.AdamW([
         {"params": lora_params, "lr": args.lr_lora},
@@ -323,9 +341,12 @@ def main():
             weights=args.weights, pooling=args.pooling,
             attention_precision="fp32",  # recorded so eval can match it
             lora=dict(r=args.lora_r, alpha=args.lora_alpha,
-                      dropout=args.lora_dropout, injected=n_inj),
+                      dropout=args.lora_dropout, injected=n_inj,
+                      injected_effective=int(n_inj_eff)),
             lr_lora=args.lr_lora, lr_head=args.lr_head,
             trainable_params=int(n_train), total_params=int(n_tot),
+            trainable_params_effective=int(n_train_eff),
+            total_params_effective=int(n_tot_eff),
             best_val_mcc=float(best_mcc),
             test_accuracy=float(t_acc), test_macro_f1=float(t_f1),
             test_mcc=float(t_mcc), classes=list(le.classes_),

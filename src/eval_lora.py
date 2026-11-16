@@ -8,8 +8,8 @@ head, and reports accuracy / macro-F1 / MCC plus the confusion matrix.
 FIXED RELATIVE TO THE ORIGINAL SCRIPT. The version used during the thesis work
 omitted the fp32 attention patch that finetune_lora_crossdna.py applies before
 training. Adapters trained under fp32 attention were therefore evaluated on the
-native bf16 autocast path — the very path the 519M checkpoint overflows on — and
-the mismatch cost about 0.03 MCC (0.4474 at training time against 0.4150 here).
+native bf16 autocast path, the very path the 519M checkpoint overflows on, and
+the MCC came out lower than at training time.
 The patch is now applied by default; `--no-fp32-attention` exists only to
 reproduce the old, mismatched behaviour deliberately.
 

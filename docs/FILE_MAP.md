@@ -17,12 +17,14 @@ original working directory.
 | `04_cluster.py` | `src/cluster_embeddings.py` |
 | `05_classify.py` | `src/classify_baselines.py` |
 | `05b_trivial_decompose.py` | `src/decompose_trivial.py` |
-| `07_mlp_probe.py` | `src/mlp_probe.py` |
-| `08_mlp_probe_compare.py` | `src/mlp_probe_compare.py` |
+| `07_mlp_probe.py` | `src/mlp_probe.py` (probe configuration 2) |
+| `08_mlp_probe_compare.py` | `src/mlp_probe_compare.py` (probe configuration 1) |
+| `baseline_mlp_kmer.py` | `src/kmer_mlp_baseline.py` |
 | `06b_finetune_lora.py` | `src/finetune_lora_crossdna.py` |
 | `06b_finetune_lora_janus.py` | `src/finetune_lora_janusdna.py` |
 | `06b_finetune_lora_janus_stem.py` | merged into `src/finetune_lora_janusdna.py` (`--stem`) |
 | `06c_eval_lora.py` | `src/eval_lora.py` |
+| `rerun_lora_saturated.sh` | `src/run_lora_saturated.sh` |
 
 ## Pre-training (`pretrain/`)
 
@@ -42,13 +44,16 @@ original working directory.
 |---|---|
 | `causal_conv_stem.py` | `stem/causal_conv_stem.py` |
 | `test_stem_wiring.py` | `stem/test_stem_wiring.py` |
-| `run_stem_experiment.sh` | `stem/run_stem_experiment.sh` |
+| `run_stem_experiment.sh` | `stem/run_stem_experiment.sh` (v2 patcher) |
 | `extract_stem.sh` | `stem/extract_stem.sh` |
 | `finetune_lora_stem.sh` | `stem/finetune_lora_stem.sh` |
-| `JanusDNA_stem*/` (4 full repo copies) | `stem/janusdna_stem.patch` |
-| — (new) | `stem/gates/gate_flexblock_neutrality.sh` |
-| — (new) | `stem/gates/gate_padding_neutrality.sh` |
-| — (new) | `stem/gates/test_impatto_padding.sh` |
+| `JanusDNA_stem*/` (4 full repo copies) | `stem/janusdna_stem_v1.patch` |
+| `janusdna_stem.patch` | `stem/janusdna_stem_v1.patch` (renamed when the v2 patcher arrived) |
+| `run_leakage_check.sh` | `stem/run_leakage_check.sh` |
+| (new) | `stem/gates/gate_flexblock_neutrality.sh` |
+| (new) | `stem/gates/gate_padding_neutrality.sh` |
+| (new) | `stem/gates/test_impatto_padding.sh` |
+| (new) | `stem/verify_theory.py`, `stem/verify_patches.py`, `stem/verify_leakage_map.py` |
 
 ## Analysis (`analysis/`)
 
@@ -60,7 +65,8 @@ original working directory.
 | `09_confusion_compare.py` | `analysis/compare_confusion.py` |
 | `confronta_confusioni.py` | `analysis/recall_vs_window.py` |
 | `per_class_accuracy.py` | `analysis/per_class_accuracy.py` |
-| — (new) | `analysis/audit_results.py` |
+| `tesi_cap5/figure/fig_gc_per_dimensione.py` | `analysis/gc_per_dimension.py` (analysis and an English figure; JSON keys renamed, see its docstring) |
+| (new) | `analysis/audit_results.py` |
 
 ## Tools (`tools/`)
 
@@ -70,9 +76,14 @@ original working directory.
 | `check_embeddings_sanity.py` | `tools/check_embeddings.py` |
 | `verify_lora_targets.py` | `tools/verify_lora_targets.py` |
 | `certify_patch.py` | `tools/certify_fp32_patch.py` |
-| — (new) | `tools/diagnose_sdpa_patch.py` |
-| — (new) | `tools/test_sdpa_mask.py` |
-| — (new) | `tools/check_weights.py` |
+| `check_budgets.py` | `tools/check_budgets.py` |
+| `inspect_embeddings.py` | `tools/inspect_embeddings.py` |
+| `lora_summary.sh` | `tools/lora_summary.sh` |
+| (new) | `tools/count_lora_params.py` |
+| (new) | `tools/check_stem_config.py` |
+| (new) | `tools/diagnose_sdpa_patch.py` |
+| (new) | `tools/test_sdpa_mask.py` |
+| (new) | `tools/check_weights.py` |
 
 ## Environment (`env/`)
 
@@ -92,43 +103,43 @@ original working directory.
 | `tokenizer_test.py` | 19-line scratch check |
 | `02_smoke.py` variants | superseded |
 | `06_finetune.py` | full fine-tuning, abandoned in favour of LoRA |
-| `06d_finetune_lora_resume.py` | one-off recovery after a container was destroyed |
+| `06d_finetune_lora_resume.py` | one-off recovery after a container was destroyed; the 19-epoch human LoRA value it produced (0.4027) is not protocol-matched and is no longer used |
 | `10_make_figures.py` | superseded by `make_figures_DEF.py` |
 | `run_extraction_janusdna.sh`, `run_extraction_janusdna72.sh` | superseded by `eval_after_pretrain.sh` |
-| `cleanup_artifacts.sh`, `collect_for_github.sh` | workspace housekeeping, not part of the pipeline |
+| `cleanup_artifacts.sh`, `collect_for_github.sh`, `raccogli_risultati.py` | workspace housekeeping, not part of the pipeline |
 | `DEF/scripts/*` | snapshot duplicates (8 of 11 byte-identical to the working copies) |
-| `consolidate_DEF.py` | workspace-specific archival script: copies ~40 artifacts between absolute paths that exist only on the original server. Its verification role — reading real numbers from the JSONs rather than transcribing them — is covered generically by `analysis/audit_results.py`. |
+| `consolidate_DEF.py` | workspace-specific archival script: copies ~40 artifacts between absolute paths that exist only on the original server. Its verification role (reading real numbers from the JSONs rather than transcribing them) is covered generically by `analysis/audit_results.py`. |
+| `check_clamp.sh` | one-off diagnostic for the 519M clamp question, settled in the README |
+| `make_review_figures.py` | slides for a progress review: numbers typed in by hand, against the rule that figures are drawn from the result files |
+| `tesi_cap5/` (thesis figure kit), `make_figure_pretraining.py`, `make_fig1_saturazione.py`, `confronto_passo1.py`, `verify_janus_loss_table.py`, `raccogli_verifica_tesi.py` | thesis-production tooling: Italian figure labels, checks against the LaTeX tables, the archive used to verify the thesis numbers. Kept with the thesis sources, not translated |
 
-## stem/ — new
+## Notes on the newer files
 
-- `verify_theory.py` — CPU verification of every measurable claim about the
+- `stem/verify_theory.py`: CPU verification of every measurable claim about the
   stem: receptive field by Jacobian, causality, flip anti-causality, parameter
   counts, realignment identity at `STRIDE = BLOCK`, tail truncation, horizon
   distribution, band arithmetic. 44 checks.
-- `verify_patches.py` — static check that the patches applied to the JanusDNA
-  copy touch exactly the intended lines and nothing else, and that `BAND = 1`
-  reproduces the upstream constants.
-- `verify_leakage_map.py` — GPU. Dependency map on the real model: for each
+- `stem/verify_patches.py`: static check that the patches applied to the
+  JanusDNA copy touch exactly the intended lines and nothing else, and that
+  `BAND = 1` reproduces the upstream constants.
+- `stem/verify_leakage_map.py`: GPU. Dependency map on the real model: for each
   offset in the predicted block, the gradient on the base that must not be
   visible. Includes the counter-proof with the band forced to its old value.
-
-## stem/ — renamed
-
-- `janusdna_stem.patch` → `janusdna_stem_v1.patch` — the single-parameter patch
-  that produced the S ∈ {4, 8, 16} runs. Kept so those runs stay reproducible;
-  superseded by `run_stem_experiment.sh` for new work.
-
-## tools/ — new
-
-- `check_stem_config.py` — derives the stem configuration (stage count, kernel,
-  block, vocabulary) from a checkpoint and refuses to proceed if the environment
-  disagrees. Covers the two mismatches that `load_state_dict(strict=False)`
-  cannot surface: a wrong stage count leaves only four unexpected keys, and a
-  wrong `BLOCK` changes `BAND` without touching any parameter at all.
-
-## docs/ — new
-
-- `STEP1_EXPERIMENT.md` — what the step-1 tokenisation run isolates, the
-  exclusion band and why it had to be parametrised, how to read the metrics
-  (inflated token counter, perplexity including the MoE term, split asymmetry),
-  measured cost, and the verification matrix.
+  `stem/run_leakage_check.sh` runs both cases with a fixed seed.
+- `stem/janusdna_stem_v1.patch`: the single-parameter patch that produced the
+  S ∈ {4, 8, 16} runs. Kept so those runs stay reproducible; superseded by
+  `run_stem_experiment.sh` for new work.
+- `tools/check_stem_config.py`: derives the stem configuration (stage count,
+  kernel, block, vocabulary) from a checkpoint and refuses to proceed if the
+  environment disagrees. Covers the two mismatches that
+  `load_state_dict(strict=False)` cannot surface: a wrong stage count leaves only
+  four unexpected keys, and a wrong `BLOCK` changes `BAND` without touching any
+  parameter at all.
+- `tools/count_lora_params.py`: LoRA targets and adapter parameters of CrossDNA
+  read from the checkpoint headers, with the teacher EMA copy counted apart.
+- `tools/check_budgets.py`: optimisation steps of every checkpoint, read from
+  the checkpoint itself; this is how the 15,000 against 50,000 step budgets were
+  established.
+- `docs/STEP1_EXPERIMENT.md`: what the step-1 tokenisation run isolates, the
+  exclusion band and why it had to be parametrised, how to read the metrics,
+  measured cost, results, and the verification matrix.

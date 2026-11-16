@@ -12,7 +12,7 @@ What it establishes:
      constant -> the S = 4 case IS the upstream behaviour, not an imitation.
 
 USAGE:
-  python verify_patches.py /workspace/JanusDNA /workspace/penguin_glm/JanusDNA_stem_s1_b4
+  python verify_patches.py $JANUSDNA_REPO $PENGUIN_ROOT/JanusDNA_stem_s1_b4
 """
 
 import re

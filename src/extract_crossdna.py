@@ -10,7 +10,7 @@ checkpoints, and the failure is silent in the sense that it produces non-finite
 values rather than an exception. Three independent controls exist:
 
   --sdp default   use PyTorch's default SDP kernel selection. The `math`
-                  implementation produced ~15% non-finite values on the 519M
+                  implementation produced non-finite values on the 519M
                   checkpoint, so `default` is what the reported results use,
                   even though `math` sounds like the safer choice.
   --amp-fp32      override the model's internal preferred_amp_dtype so the
@@ -86,9 +86,9 @@ def install_clamp(model):
                 name or "?", {"calls": 0, "hits": 0, "nonfinite": 0,
                               "checked": 0, "full": 0, "at": []})
             # Ordinal within this name. ensure_finite carries no layer index, so
-            # the call order is the only handle on WHICH layer failed — and
-            # "one attention layer out of 24 is dead" is a very different
-            # statement from "1.3% of values are noisy".
+            # the call order is the only handle on WHICH layer failed, and a
+            # single failing attention layer is a very different finding from
+            # values that are noisy everywhere.
             ordinal = rec["calls"]
             rec["calls"] += 1
             rec["checked"] += x.numel()

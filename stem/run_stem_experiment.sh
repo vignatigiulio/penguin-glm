@@ -31,11 +31,13 @@
 set -euo pipefail
 
 # ======================= PATHS (CHECK THESE) =================================
-SRC_REPO="${SRC_REPO:-/workspace/JanusDNA}"            # baseline, NEVER touched
-STAGING="${STAGING:-/workspace/penguin_glm}"                # where the two .py files live
-OUT_ROOT="${OUT_ROOT:-/workspace/penguin_glm/janusdna_stem/pretrain_scratch}"
-FASTA="${FASTA:-/workspace/penguin_glm/data/penguin/GCF_965638725.1.fna}"
-BED="${BED:-/workspace/penguin_glm/data/penguin/penguin_pretrain_clean.bed}"
+: "${PENGUIN_ROOT:=$HOME/penguin_glm}"
+SRC_REPO="${SRC_REPO:-${JANUSDNA_REPO:-$PENGUIN_ROOT/JanusDNA}}"   # baseline, NEVER touched
+STAGING="${STAGING:-$PENGUIN_ROOT}"                     # where the patched copies are created
+STEM_SRC="${STEM_SRC:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"  # causal_conv_stem.py, test_stem_wiring.py
+OUT_ROOT="${OUT_ROOT:-$PENGUIN_ROOT/janusdna_stem/pretrain_scratch}"
+FASTA="${FASTA:-$PENGUIN_ROOT/data/penguin/GCF_965638725.1.fna}"
+BED="${BED:-$PENGUIN_ROOT/data/penguin/penguin_pretrain_clean.bed}"
 CONDA_ENV="${CONDA_ENV:-janusdna}"
 # =============================================================================
 
@@ -61,8 +63,8 @@ STEM_BAND=$(( STEM_BLOCK / STEM_STRIDE ))
 [ "$STEM_REPO" != "$SRC_REPO" ] || { echo "ERROR: STEM_REPO == SRC_REPO"; exit 1; }
 case "$STEM_REPO" in *_stem*|*JanusDNA_stem*) : ;; *) echo "ERROR: STEM_REPO does not contain '_stem', refusing for safety"; exit 1;; esac
 [ -d "$SRC_REPO/janusdna" ] || { echo "ERROR: $SRC_REPO/janusdna does not exist"; exit 1; }
-[ -f "$STAGING/causal_conv_stem.py" ] || { echo "ERROR: missing $STAGING/causal_conv_stem.py"; exit 1; }
-[ -f "$STAGING/test_stem_wiring.py" ] || { echo "ERROR: missing $STAGING/test_stem_wiring.py"; exit 1; }
+[ -f "$STEM_SRC/causal_conv_stem.py" ] || { echo "ERROR: missing $STEM_SRC/causal_conv_stem.py"; exit 1; }
+[ -f "$STEM_SRC/test_stem_wiring.py" ] || { echo "ERROR: missing $STEM_SRC/test_stem_wiring.py"; exit 1; }
 [ -f "$FASTA" ] || { echo "ERROR: FASTA not found: $FASTA"; exit 1; }
 [ -f "$BED" ]   || { echo "ERROR: BED not found: $BED"; exit 1; }
 
@@ -79,8 +81,8 @@ else
 fi
 
 echo ">>> [2/5] Placing the .py files into the copy"
-cp "$STAGING/causal_conv_stem.py" "$STEM_REPO/janusdna/causal_conv_stem.py"
-cp "$STAGING/test_stem_wiring.py" "$STEM_REPO/test_stem_wiring.py"
+cp "$STEM_SRC/causal_conv_stem.py" "$STEM_REPO/janusdna/causal_conv_stem.py"
+cp "$STEM_SRC/test_stem_wiring.py" "$STEM_REPO/test_stem_wiring.py"
 
 echo ">>> [3/5] Patching the model (patch-or-die, 6 patches + 2 on train.py)"
 python3 - "$STEM_REPO" << 'PY'

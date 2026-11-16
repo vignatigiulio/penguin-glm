@@ -11,7 +11,7 @@ silently disagree with the tables.
 Figures:
   1. zero_shot_vs_lora   the headline result (2 models x 2 regimes)
   2. nmi_gc_vs_function   the central result (embeddings organise by GC)
-  3. pretraining_curves   training dynamics (CrossDNA saturation)
+  3. pretraining_curves   training dynamics, one point per epoch, own x axis per model
   4. confusion_matrices   post-LoRA confusion, row-normalised
 
 Usage:
@@ -93,8 +93,12 @@ def fig_zero_vs_lora():
     jz_h = probe_seeds("mlp_janus_clean_seed", "janus144_human")
     cz_s = probe_seeds("mlp_crossdna_seed", "crossdna81_scratch")
     cz_h = probe_seeds("mlp_crossdna_seed", "crossdna81_human")
-    jl_s = lora_mcc("lora_janus144_scratch_clean")
-    jl_h = lora_mcc("lora_janus144_resume")
+    # JanusDNA: both arms re-run to saturation (rerun with src/run_lora_saturated.sh).
+    # The older pair (lora_janus144_scratch_clean, 10 epochs, against
+    # lora_janus144_resume, 19 epochs) is not protocol-matched and is not used.
+    jl_s = lora_mcc("lora_baseline_ep25")
+    jl_h = lora_mcc("lora_human_ep25")
+    # CrossDNA: both arms at 10 epochs, the budget they were run with.
     cl_s = lora_mcc("lora_crossdna81_scratch_clean")
     cl_h = lora_mcc("lora_crossdna81_human_fp32")
 
@@ -131,6 +135,11 @@ def fig_zero_vs_lora():
     axes[0].set_ylabel("MCC (test)")
     axes[0].legend(loc="upper left", fontsize=9, frameon=False)
     fig.suptitle("In-domain pre-training vs transfer: zero-shot and after LoRA", y=1.02)
+    fig.text(0.5, -0.04,
+             "Zero-shot: MLP probe, 4 seeds (mlp_probe_compare.py). LoRA: JanusDNA at "
+             "saturation (early stopping), CrossDNA at 10 epochs; the two panels do "
+             "not share a LoRA budget.",
+             ha="center", fontsize=8, style="italic")
     save(fig, "1_zero_shot_vs_lora")
 
 
@@ -169,19 +178,32 @@ def fig_curves():
     jlog = PENGUIN_ROOT / "janusdna/checkpoints_final/train_janus_scratch_clean.log"
     clog = PENGUIN_ROOT / "crossdna/checkpoints_final/train_crossdna_scratch_60k.log"
     CROSS_STEPS_PER_EPOCH = 7591  # from the clean CrossDNA BED
+    CROSS_TOTAL_STEPS = 60000     # length of the CrossDNA run behind this log
 
-    fig, axes = plt.subplots(1, 2, figsize=(9.5, 4), sharex=True)
+    # The two runs have different epoch lengths (~893 steps for JanusDNA, 7,591
+    # for CrossDNA), so the panels must NOT share the x axis: sharex=True
+    # stretched the CrossDNA axis to the JanusDNA epoch count.
+    fig, axes = plt.subplots(1, 2, figsize=(9.5, 4))
     ok = False
 
-    # --- JanusDNA: val/main_loss, once per epoch ---
+    # --- JanusDNA: val/main_loss, once per completed epoch ---
+    # The log is a progress bar that repeats the last validation value on every
+    # line. One value per epoch is the one shown when the bar of that epoch
+    # reaches 100%. Deduplicating by VALUE (dict.fromkeys) is wrong: with three
+    # decimals two epochs can share a value, and the later one disappears.
     if jlog.exists():
-        v = [float(x) for x in
-             re.findall(r"val/main_loss_epoch=([0-9.]+)", jlog.read_text())]
-        v = list(dict.fromkeys(v))  # drop consecutive duplicates
+        val, complete = {}, set()
+        for line in re.split(r"[\r\n]", jlog.read_text(errors="ignore")):
+            m = re.search(r"Epoch (\d+):\s+(\d+)%.*val/main_loss_epoch=([0-9.]+)", line)
+            if m:
+                val[int(m.group(1))] = float(m.group(3))
+                if m.group(2) == "100":
+                    complete.add(int(m.group(1)))
+        v = [val[e] for e in sorted(complete)]
         if v:
             ep = np.arange(1, len(v) + 1)
             axes[0].plot(ep, v, "-o", color=C_SCRATCH, ms=4)
-            axes[0].set_title("JanusDNA (causal objective)")
+            axes[0].set_title("JanusDNA (Janus objective, bidirectional)")
             axes[0].set_xlabel("epoch")
             axes[0].set_ylabel("val loss (main)")
             axes[0].grid(alpha=0.3)
@@ -192,8 +214,17 @@ def fig_curves():
         ce = [float(x) for x in re.findall(r"CE ([0-9.]+)", clog.read_text())]
         if ce:
             ce = np.array(ce)
-            n_ep = int(np.ceil(len(ce) / CROSS_STEPS_PER_EPOCH))
-            ce_per_epoch = [ce[i * CROSS_STEPS_PER_EPOCH:(i + 1) * CROSS_STEPS_PER_EPOCH].mean()
+            # The log does not necessarily hold one CE value per step. Derive the
+            # number of values per epoch from the run length instead of assuming
+            # it, and say so when the two differ.
+            per_step = len(ce) / CROSS_TOTAL_STEPS
+            per_epoch = max(1, int(round(CROSS_STEPS_PER_EPOCH * per_step)))
+            if abs(per_step - 1) > 0.05:
+                print(f"  [note] CrossDNA log: {len(ce)} CE values for "
+                      f"{CROSS_TOTAL_STEPS} steps ({per_step:.2f} per step); "
+                      f"averaging {per_epoch} values per epoch")
+            n_ep = int(np.ceil(len(ce) / per_epoch))
+            ce_per_epoch = [ce[i * per_epoch:(i + 1) * per_epoch].mean()
                             for i in range(n_ep)]
             ep = np.arange(1, len(ce_per_epoch) + 1)
             axes[1].plot(ep, ce_per_epoch, "-o", color=C_GC, ms=4)
@@ -223,8 +254,8 @@ def fig_curves():
 # ---------- FIGURE 4: confusion matrices ----------
 def fig_confusion():
     panels = [
-        ("JanusDNA from-scratch", "lora_janus144_scratch_clean"),
-        ("JanusDNA human", "lora_janus144_resume"),
+        ("JanusDNA from-scratch", "lora_baseline_ep25"),
+        ("JanusDNA human", "lora_human_ep25"),
         ("CrossDNA from-scratch", "lora_crossdna81_scratch_clean"),
         ("CrossDNA human", "lora_crossdna81_human_fp32"),
     ]

@@ -138,10 +138,13 @@ def main():
             fig, ax = plt.subplots(1, 2, figsize=(14, 6))
             ci = {c: i for i, c in enumerate(classes)}
             col = np.array([ci[v] for v in y[vsub]])
-            ax[0].scatter(emb2[:, 0], emb2[:, 1], c=col, cmap="tab10", s=4, alpha=0.5)
+            # Explicit RGBA per point, from the same table the legend uses. Passing the
+            # integer codes with cmap="tab10" rescales them to 0..1, so the points
+            # landed on colours 0, 3, 6, 9 while the legend showed 0, 1, 2, 3.
+            ax[0].scatter(emb2[:, 0], emb2[:, 1], c=plt.cm.tab10(col % 10), s=4, alpha=0.5)
             ax[0].set_title(f"{name} — {proj} by CLASS")
             handles = [plt.Line2D([0], [0], marker="o", ls="",
-                                  color=plt.cm.tab10(ci[c] / 10), label=c)
+                                  color=plt.cm.tab10(ci[c] % 10), label=c)
                        for c in classes]
             ax[0].legend(handles=handles, fontsize=8, markerscale=1.5)
             s1 = ax[1].scatter(emb2[:, 0], emb2[:, 1], c=df["gc"].to_numpy()[vsub],

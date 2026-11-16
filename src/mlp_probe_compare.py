@@ -8,9 +8,11 @@ identical split. That symmetry is the point. Comparing a number obtained here
 against one obtained from a separately written script invites exactly the kind
 of protocol mismatch that `analysis/audit_results.py` exists to detect.
 
-Note the difference from mlp_probe.py: this variant uses dropout 0.1, 30 epochs
-and patience 5, against 0.3 / 60 / 8. The two are NOT interchangeable and their
-outputs must not be pooled — use one or the other for a given comparison.
+Note the difference from mlp_probe.py: this variant (probe CONFIGURATION 1,
+used for the zero-shot comparisons between models) uses dropout 0.1, 30 epochs and
+patience 5, against 0.3 / 60 / 8 of configuration 2. The two are NOT
+interchangeable and their outputs must not be pooled: use one or the other for a
+given comparison.
 
 Usage:
     python mlp_probe_compare.py --windows windows.parquet \\
@@ -158,7 +160,8 @@ def main():
     print("\n=== ZERO-SHOT MLP PROBE (descending MCC) ===")
     print(res.to_string(index=False))
     print("\nreference points on the same windows: k-mer RF 0.243 | "
-          "CrossDNA-519M single-seed probe 0.289 | CrossDNA-8.1M single-seed probe 0.272")
+          "k-mer MLP (this script, 4 seeds) 0.301 | "
+          "CrossDNA-519M 0.288 | CrossDNA-8.1M 0.274")
     print(f"\nResults in {args.outdir}/")
 
 

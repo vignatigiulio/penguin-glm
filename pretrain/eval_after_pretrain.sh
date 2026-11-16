@@ -117,7 +117,7 @@ run_lora() {
     --outdir "$PENGUIN_ROOT/out/lora_janus144_scratch_clean"
 
   echo "----- comparison against the references -----"
-  echo "  expected: human 0.4027"
+  echo "  expected after 10 epochs: from-scratch 0.4028 | human 0.3848"
   python - <<'PY' 2>/dev/null || echo "  (lora_results.json not written yet)"
 import json, os
 p = os.path.join(os.environ.get("PENGUIN_ROOT", "."),
@@ -136,7 +136,8 @@ case "$STEP" in
   all)     run_freeze; run_extract; run_probe; run_lora
            echo ""
            echo "===== COMPLETE. Arm summary: ====="
-           echo "  zero-shot: from-scratch 0.3218 | human 0.3088"
-           echo "  LoRA:      from-scratch 0.4028 | human 0.4027" ;;
+           echo "  zero-shot (4 seeds):  from-scratch 0.322  | human 0.309"
+           echo "  LoRA, 10 epochs:      from-scratch 0.4028 | human 0.3848"
+           echo "  LoRA, to saturation:  from-scratch 0.4096 | human 0.4080" ;;
   *) echo "usage: $0 [freeze|extract|probe|lora|all]"; exit 1 ;;
 esac

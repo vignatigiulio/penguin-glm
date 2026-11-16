@@ -1,10 +1,9 @@
 #!/bin/bash
 # test_impatto_padding.sh — does the padding move the METRICS, not just the vectors?
 #
-# THE QUESTION. gate_padding_neutrality.sh measured, for a 2.4% pad
-# (1000 -> 1024), a minimum cosine of 0.9956 and a 4.5% relative difference: the
-# vectors do move a little. But "do the vectors change?" is not what the
-# conclusions rest on. The question that matters is:
+# THE QUESTION. gate_padding_neutrality.sh checks whether the vectors move with
+# the padding. But "do the vectors change?" is not what the conclusions rest on.
+# The question that matters is:
 #
 #     does the padding change NMI vs GC, NMI vs function, and silhouette —
 #     the quantities the argument is built from?

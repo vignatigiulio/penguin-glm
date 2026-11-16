@@ -6,13 +6,13 @@ reading the confusion matrix from each one's lora_results.json.
 recall of class i = CM[i,i] / sum(CM[i, :])   (how many true-i are predicted i)
 
 Useful because two models can reach nearly the same MCC by very different
-routes. In this project the from-scratch and human-pretrained JanusDNA runs land
-within 0.0001 MCC of each other after LoRA, and the per-class breakdown is where
-any actual difference between them would show up.
+routes. In this project the from-scratch and human-pretrained JanusDNA runs end
+within 0.002 MCC of each other after LoRA at saturation, and the per-class
+breakdown is where any actual difference between them would show up.
 
 Usage:
-  python per_class_accuracy.py penguin=out/lora_janus144_scratch_clean \\
-                               human=out/lora_janus144_resume
+  python per_class_accuracy.py penguin=out/lora_baseline_ep25 \\
+                               human=out/lora_human_ep25
 """
 import json
 import sys
@@ -21,8 +21,8 @@ from pathlib import Path
 import numpy as np
 
 DEFAULTS = {
-    "penguin": "out/lora_janus144_scratch_clean",
-    "human": "out/lora_janus144_resume",
+    "penguin": "out/lora_baseline_ep25",
+    "human": "out/lora_human_ep25",
 }
 
 

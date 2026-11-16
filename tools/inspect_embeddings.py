@@ -1,26 +1,26 @@
 #!/usr/bin/env python3
 """
-inspect_embeddings.py -- PUNTO 2: la 519M e' "stabile" (tesi) o ha "instabilita'
-residua" (README)?
+inspect_embeddings.py -- separate non-finite values from clamped values in an
+embedding archive (written to check the CrossDNA-519M archives).
 
-Le due affermazioni misurano cose diverse: un valore puo' essere FINITO ma enorme,
-e finire clampato senza essere mai stato NaN/Inf. Questo script separa le due cose:
+The two are different things: a value can be FINITE but huge, and be clamped
+without ever having been NaN/Inf. This script reports them separately:
 
-    non-finiti  -> NaN o Inf veri e propri        (la tesi dice: zero)
-    clamp       -> valori azzerati/saturati       (il README dice: 2-3%)
+    non-finite  -> genuine NaN or Inf
+    clamp       -> values zeroed or saturated by --clamp at extraction time
 
-USO
-    # 1. ispezione di uno o piu' archivi
+USAGE
+    # 1. inspect one or more archives
     python inspect_embeddings.py $PENGUIN_ROOT/out/embeddings/*519*.npz
 
-    # 2. confronto clamp vs no-clamp SULLE METRICHE (non sui vettori)
+    # 2. clamp vs no-clamp comparison ON THE METRICS (not on the vectors)
     python inspect_embeddings.py emb_clamp.npz emb_noclamp.npz --compare
 
-    # 3. come sopra, aggiungendo la sonda lineare (piu' lento, ~1-3 min)
+    # 3. as above, adding the linear probe (slower, ~1-3 min)
     python inspect_embeddings.py emb_clamp.npz emb_noclamp.npz --compare --probe
 
-NOTA sul confronto: riproduce il protocollo della tesi solo approssimativamente.
-Cio' che conta e' il DELTA fra i due archivi, non il valore assoluto.
+NOTE on the comparison: it reproduces the thesis protocol only approximately.
+What matters is the DELTA between the two archives, not the absolute value.
 """
 
 import argparse
@@ -37,7 +37,7 @@ SPLIT_KEYS = ("split", "partition", "set")
 
 
 def pick(z, candidates):
-    """Trova la prima chiave che assomiglia a una di quelle candidate."""
+    """Return the first key that looks like one of the candidates."""
     keys = list(z.keys())
     for c in candidates:
         for k in keys:
@@ -51,7 +51,7 @@ def pick(z, candidates):
 
 
 def biggest_float(z):
-    """L'array float 2-D piu' grande: quasi sempre e' la matrice di embedding."""
+    """The largest 2-D float array: almost always the embedding matrix."""
     best, best_size = None, -1
     for k in z.keys():
         try:
@@ -67,17 +67,17 @@ def biggest_float(z):
 def describe(path, deep=True):
     print(f"\n{'='*92}\n{path}\n{'='*92}")
     if not os.path.isfile(path):
-        print("  FILE ASSENTE")
+        print("  FILE MISSING")
         return None
     try:
         z = np.load(path, allow_pickle=True)
     except Exception as e:
-        print(f"  ERRORE nel caricamento: {e}")
+        print(f"  ERROR while loading: {e}")
         return None
 
-    print(f"  chiavi: {list(z.keys())}\n")
+    print(f"  keys: {list(z.keys())}\n")
 
-    # -- metadati: spesso salvati come dict in un array 0-d ------------------
+    # -- metadata: often saved as a dict inside a 0-d array -----------------
     meta_found = False
     for k in z.keys():
         kl = k.lower()
@@ -86,23 +86,23 @@ def describe(path, deep=True):
                 v = z[k]
                 v = v.item() if getattr(v, "ndim", 1) == 0 else v
             except Exception:
-                v = "<illeggibile>"
+                v = "<unreadable>"
             print(f"  [META] {k} = {v}")
             meta_found = True
     if not meta_found:
-        print("  [META] nessuna chiave di metadati riconosciuta "
-              "(cerca 'clamp' nel sorgente di estrazione)")
+        print("  [META] no recognised metadata key "
+              "(search for 'clamp' in the extraction source)")
 
     ek = pick(z, FLOAT_KEYS) or biggest_float(z)
     if ek is None:
-        print("\n  nessuna matrice float trovata")
+        print("\n  no float matrix found")
         return None
 
     X = z[ek]
-    print(f"\n  matrice: '{ek}'  shape={X.shape}  dtype={X.dtype}")
+    print(f"\n  matrix: '{ek}'  shape={X.shape}  dtype={X.dtype}")
 
     if not np.issubdtype(X.dtype, np.floating):
-        print("  (non float: salto le statistiche numeriche)")
+        print("  (not float: skipping the numeric statistics)")
         return dict(path=path, key=ek, X=None, z=z)
 
     Xf = X.astype(np.float64, copy=False)
@@ -112,46 +112,46 @@ def describe(path, deep=True):
     n_inf = int(np.isinf(Xf).sum())
     tot = Xf.size
 
-    print(f"\n  --- NON-FINITI (l'affermazione della tesi) ---")
+    print(f"\n  --- NON-FINITE VALUES ---")
     print(f"  NaN            : {n_nan}")
     print(f"  Inf            : {n_inf}")
-    print(f"  totale         : {n_nonfinite}  su {tot}  ({100*n_nonfinite/tot:.4f}%)")
-    print(f"  righe colpite  : {int((~finite).any(axis=1).sum())} su {X.shape[0]}")
+    print(f"  total          : {n_nonfinite}  of {tot}  ({100*n_nonfinite/tot:.4f}%)")
+    print(f"  rows affected  : {int((~finite).any(axis=1).sum())} of {X.shape[0]}")
 
     if n_nonfinite == 0:
-        print("  -> coerente con la tesi: nessun valore non finito.")
+        print("  -> no non-finite value.")
     else:
-        print("  -> IN CONTRASTO con la tesi: ci sono valori non finiti.")
+        print("  -> non-finite values present.")
 
     if deep and finite.any():
         vals = Xf[finite]
         n_zero = int((Xf == 0).sum())
         rows_with_zero = int((Xf == 0).any(axis=1).sum())
-        print(f"\n  --- IMPRONTA DEL CLAMP (l'affermazione del README) ---")
-        print(f"  zeri esatti    : {n_zero}  ({100*n_zero/tot:.3f}% dei valori)")
-        print(f"  righe con zeri : {rows_with_zero}  ({100*rows_with_zero/X.shape[0]:.2f}%)")
+        print(f"\n  --- CLAMP FOOTPRINT ---")
+        print(f"  exact zeros    : {n_zero}  ({100*n_zero/tot:.3f}% of the values)")
+        print(f"  rows with zeros: {rows_with_zero}  ({100*rows_with_zero/X.shape[0]:.2f}%)")
         print(f"  |x| max        : {np.abs(vals).max():.4e}")
         print(f"  |x| p99.9      : {np.percentile(np.abs(vals), 99.9):.4e}")
-        print(f"  media / dev.st : {vals.mean():.4e} / {vals.std():.4e}")
+        print(f"  mean / std     : {vals.mean():.4e} / {vals.std():.4e}")
         if 0.005 <= n_zero / tot <= 0.05:
-            print("  -> la frazione di zeri e' nell'ordine del 2-3% citato dal README:")
-            print("     compatibile con un clamp che azzera, NON con valori non finiti.")
+            print("  -> exact zeros between 0.5% and 5% of the values:")
+            print("     consistent with a clamp that zeroes, NOT with non-finite values.")
         elif n_zero == 0:
-            print("  -> nessuno zero esatto: nessuna traccia di clamp in questo archivio.")
+            print("  -> no exact zero: no trace of the clamp in this archive.")
 
     return dict(path=path, key=ek, X=X, z=z)
 
 
-# --------------------------------------------------- confronto sulle metriche ---
+# --------------------------------------------------- comparison on the metrics ---
 
 def metrics(X, z, probe=False, seed=0):
-    """NMI (k-means, k=4) rispetto a classi e GC; opzionale MCC da sonda lineare."""
+    """NMI (k-means, k=4) against classes and GC; optional MCC from a linear probe."""
     try:
         from sklearn.cluster import KMeans
         from sklearn.preprocessing import StandardScaler
         from sklearn.metrics import normalized_mutual_info_score
     except ImportError:
-        print("  sklearn non disponibile: salto le metriche")
+        print("  sklearn not available: skipping the metrics")
         return {}
 
     out = {}
@@ -164,13 +164,13 @@ def metrics(X, z, probe=False, seed=0):
 
     if lab_k is not None:
         y = np.asarray(z[lab_k]).ravel()
-        out["NMI_funzione"] = normalized_mutual_info_score(y, km.labels_)
+        out["NMI_function"] = normalized_mutual_info_score(y, km.labels_)
     if gc_k is not None:
         gc = np.asarray(z[gc_k]).ravel().astype(float)
         gcb = np.digitize(gc, np.quantile(gc, [0.25, 0.5, 0.75]))
         out["NMI_GC"] = normalized_mutual_info_score(gcb, km.labels_)
-    if "NMI_funzione" in out and out.get("NMI_GC"):
-        out["rapporto_f_GC"] = out["NMI_funzione"] / out["NMI_GC"]
+    if "NMI_function" in out and out.get("NMI_GC"):
+        out["ratio_function_GC"] = out["NMI_function"] / out["NMI_GC"]
 
     if probe and lab_k is not None:
         from sklearn.linear_model import LogisticRegression
@@ -190,19 +190,19 @@ def metrics(X, z, probe=False, seed=0):
             tr = np.zeros(len(y), bool); tr[idx[:cut]] = True
             te = ~tr
         clf = LogisticRegression(max_iter=2000).fit(Xs[tr], y[tr])
-        out["MCC_sonda_lineare"] = matthews_corrcoef(y[te], clf.predict(Xs[te]))
+        out["MCC_linear_probe"] = matthews_corrcoef(y[te], clf.predict(Xs[te]))
     return out
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("paths", nargs="+", help="file .npz (accetta glob della shell)")
+    ap.add_argument("paths", nargs="+", help=".npz files (shell globs accepted)")
     ap.add_argument("--compare", action="store_true",
-                    help="confronta i primi due archivi sulle METRICHE")
+                    help="compare the first two archives on the METRICS")
     ap.add_argument("--probe", action="store_true",
-                    help="aggiunge la sonda lineare al confronto (piu' lento)")
-    ap.add_argument("--quick", action="store_true", help="salta le statistiche pesanti")
+                    help="add the linear probe to the comparison (slower)")
+    ap.add_argument("--quick", action="store_true", help="skip the heavy statistics")
     args = ap.parse_args()
 
     paths = []
@@ -214,9 +214,9 @@ def main():
 
     if args.compare:
         if len(loaded) < 2:
-            sys.exit("\nservono due archivi leggibili per --compare")
+            sys.exit("\n--compare needs two readable archives")
         a, b = loaded[0], loaded[1]
-        print(f"\n{'='*92}\nCONFRONTO SULLE METRICHE (cio' che regge l'argomento)\n{'='*92}")
+        print(f"\n{'='*92}\nCOMPARISON ON THE METRICS (what the argument rests on)\n{'='*92}")
         print(f"  A = {a['path']}\n  B = {b['path']}\n")
 
         if a["X"].shape == b["X"].shape:
@@ -225,25 +225,25 @@ def main():
             num = (A * B).sum(1)
             den = np.linalg.norm(A, axis=1) * np.linalg.norm(B, axis=1) + 1e-12
             cos = num / den
-            print(f"  coseno per riga: min={cos.min():.6f}  medio={cos.mean():.6f}")
+            print(f"  row cosine: min={cos.min():.6f}  mean={cos.mean():.6f}")
             rel = np.abs(A - B).sum() / (np.abs(A).sum() + 1e-12)
-            print(f"  differenza relativa: {100*rel:.2f}%\n")
+            print(f"  relative difference: {100*rel:.2f}%\n")
         else:
-            print("  shape diverse: salto il confronto vettoriale\n")
+            print("  different shapes: skipping the vector comparison\n")
 
         ma = metrics(a["X"], a["z"], probe=args.probe)
         mb = metrics(b["X"], b["z"], probe=args.probe)
         keys = sorted(set(ma) | set(mb))
         if keys:
-            print(f"  {'metrica':<20} {'A':>10} {'B':>10} {'delta':>10}")
+            print(f"  {'metric':<20} {'A':>10} {'B':>10} {'delta':>10}")
             for k in keys:
                 va, vb = ma.get(k), mb.get(k)
                 d = f"{vb-va:+.4f}" if (va is not None and vb is not None) else "-"
                 print(f"  {k:<20} {va if va is None else f'{va:.4f}':>10} "
                       f"{vb if vb is None else f'{vb:.4f}':>10} {d:>10}")
-            print("\n  Se i delta sono trascurabili, il clamp e' cosmetico e va")
-            print("  dichiarato come diagnostica. Se si muovono, ogni risultato della")
-            print("  519M deve riportare la clamp_fraction, come chiede il README.")
+            print("\n  If the deltas are negligible, the clamp is cosmetic and should")
+            print("  be reported as a diagnostic. If they move, every 519M result must")
+            print("  report the clamp_fraction stored in the .npz metadata.")
 
 
 if __name__ == "__main__":

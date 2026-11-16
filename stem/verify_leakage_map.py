@@ -21,7 +21,7 @@ it on a free GPU, or after training. Keep T small (default 256).
 
 USAGE:
   python verify_leakage_map.py \\
-      --repo-path /workspace/penguin_glm/JanusDNA_stem_s1_b4 \\
+      --repo-path $PENGUIN_ROOT/JanusDNA_stem_s1_b4 \\
       --model-config <run_dir>/model_config.json \\
       --stride 1 --block 4
 

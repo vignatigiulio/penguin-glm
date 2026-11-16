@@ -3,11 +3,15 @@
 mlp_probe.py — supervised MLP probe on frozen embeddings.
 
 The backbone is never touched: this measures how much functional information is
-linearly-plus-a-little recoverable from the zero-shot representation. It is the
-protocol behind every "zero-shot MCC" number reported for this project, so its
-hyperparameters are part of the result and must be held fixed across models —
-two hidden layers of 256 with ReLU and dropout 0.3, AdamW, early stopping on
-validation MCC.
+linearly-plus-a-little recoverable from the zero-shot representation. Its
+hyperparameters are part of the result and must be held fixed across models.
+
+This is probe CONFIGURATION 2: two hidden layers of 256 with ReLU and dropout
+0.3, AdamW, up to 60 epochs, early stopping on validation MCC (patience 8),
+used for the GC-attractor analyses (stem sweep and step-1 run). The zero-shot
+comparisons between models use mlp_probe_compare.py (CONFIGURATION 1: dropout
+0.1, 30 epochs, patience 5). The two configurations give different numbers on
+the same embeddings and must not be mixed.
 
 MCC rather than accuracy is the headline metric because the four classes are
 balanced by construction here but the confusion structure is not: MCC penalises

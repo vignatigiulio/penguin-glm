@@ -316,19 +316,19 @@ def main():
         cidx = {c: i for i, c in enumerate(classes)}
         cols = np.array([cidx[v] for v in y])[sub]
         fig, ax = plt.subplots(1, 2, figsize=(13, 5))
-        ax[0].scatter(Z[sub, 0], Z[sub, 1], c=cols, cmap="tab10", s=4, alpha=0.5)
+        ax[0].scatter(Z[sub, 0], Z[sub, 1], c=plt.cm.tab10(cols % 10), s=4, alpha=0.5)
         ax[0].set_title(f"{name} — PC1 vs PC2 (max variance)\n"
                         f"$\\eta^2$ fn = {pcs['eta2'][0]+pcs['eta2'][1]:.3f}")
         ax[0].set_xlabel("PC1")
         ax[0].set_ylabel("PC2")
         a, b = best_fn
-        ax[1].scatter(Z[sub, a], Z[sub, b], c=cols, cmap="tab10", s=4, alpha=0.5)
+        ax[1].scatter(Z[sub, a], Z[sub, b], c=plt.cm.tab10(cols % 10), s=4, alpha=0.5)
         ax[1].set_title(f"{name} — PC{a+1} vs PC{b+1} (max functional signal)\n"
                         f"$\\eta^2$ fn = {pcs['eta2'][a]+pcs['eta2'][b]:.3f}")
         ax[1].set_xlabel(f"PC{a+1}")
         ax[1].set_ylabel(f"PC{b+1}")
         handles = [plt.Line2D([0], [0], marker="o", ls="",
-                              color=plt.cm.tab10(cidx[c] / 10), label=str(c))
+                              color=plt.cm.tab10(cidx[c] % 10), label=str(c))
                    for c in classes]
         ax[1].legend(handles=handles, fontsize=8, markerscale=1.2)
         fig.tight_layout()
@@ -346,19 +346,19 @@ def main():
             len(Zl), size=min(6000, len(Zl)), replace=False)
         colsl = np.array([cidx[v] for v in yl])[subl]
         fig, ax = plt.subplots(1, 2, figsize=(13, 5))
-        ax[0].scatter(Z[sub, 0], Z[sub, 1], c=cols, cmap="tab10", s=4, alpha=0.5)
+        ax[0].scatter(Z[sub, 0], Z[sub, 1], c=plt.cm.tab10(cols % 10), s=4, alpha=0.5)
         ax[0].set_title(f"{name} — PCA (unsupervised)\n"
                         f"$\\eta^2$ fn = {pcs['eta2'][0]+pcs['eta2'][1]:.3f}")
         ax[0].set_xlabel("PC1")
         ax[0].set_ylabel("PC2")
         if Zl.shape[1] >= 2:
-            ax[1].scatter(Zl[subl, 0], Zl[subl, 1], c=colsl, cmap="tab10",
+            ax[1].scatter(Zl[subl, 0], Zl[subl, 1], c=plt.cm.tab10(colsl % 10),
                           s=4, alpha=0.5)
             ax[1].set_ylabel("LD2")
         else:
             ax[1].scatter(Zl[subl, 0],
                           np.random.default_rng(0).normal(0, .05, len(subl)),
-                          c=colsl, cmap="tab10", s=4, alpha=0.5)
+                          c=plt.cm.tab10(colsl % 10), s=4, alpha=0.5)
         ax[1].set_title(f"{name} — LDA (supervised, held-out)\n"
                         f"$\\eta^2$ fn = {lda['eta2'].sum():.3f}  "
                         f"acc = {lda['acc']:.3f}")
