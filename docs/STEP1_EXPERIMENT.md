@@ -1,7 +1,7 @@
 # Step-1 tokenisation experiment
 
-Reference for the `stem/` scripts in their v2 form. Written for someone
-reproducing the work, not as a narrative of how it was developed.
+Reference for the `stem/` scripts in their v2 form, written for someone
+reproducing the work.
 
 ## What the previous comparison could not separate
 
@@ -12,13 +12,12 @@ Going from the baseline to the `S = 4` conv stem changed three things at once:
 | baseline | 1000 | 1 | 1 |
 | stem S = 4 | 250 | 19 bp | 4 |
 
-The measured attenuation of the GC attractor (NMI against GC content, 0.404 →
-0.259) is therefore attributable to any of the three, or to a combination.
+The attenuation of the GC attractor (NMI against GC content, 0.404 → 0.259)
+could therefore come from any of the three, or from a combination.
 
-Note in particular that the stem at `S = 4` did **not** see disjoint 4-base
-blocks: two stride-2 convolutions with kernel 7 give a receptive field of 19 bp,
-so adjacent super-tokens overlap by 15 bases. Only the prediction *targets* were
-disjoint.
+The stem at `S = 4` did not see disjoint 4-base blocks. Two stride-2
+convolutions with kernel 7 give a receptive field of 19 bp, so adjacent
+super-tokens overlap by 15 bases; only the prediction targets were disjoint.
 
 ## What the step-1 run isolates
 
@@ -52,15 +51,16 @@ backward branch at `p + BAND` summarises everything from `p + BAND` on. The loss
 is a plain cross-entropy with no shift, so the prediction is encoded entirely in
 these offsets.
 
-`BAND` is hardcoded to 1 upstream, in **grid cells**. At `S = 4` one grid cell
-is worth four bases, so the band happened to cover the whole predicted block. At
-step 1 a cell is worth one base while the block is still four, so three of the
-four target bases would be visible to the backward branch. The model would copy
-rather than predict: lower loss, better-looking curves, no error on screen.
+Upstream, `BAND` is hardcoded to 1 and counted in grid cells. At `S = 4` one
+grid cell is worth four bases, so the band happened to cover the whole predicted
+block. At step 1 a cell is worth one base while the block is still four, so
+three of the four target bases would be visible to the backward branch, and the
+model would copy them instead of predicting them, with a lower loss and no error
+raised.
 
-The parametrisation is `BAND = BLOCK / STRIDE`, applied in two places: the
-FlexAttention mask and the fusion offsets. Patching the mask alone has no effect,
-because the fusion keeps picking slot `p + 1` regardless.
+The fix sets `BAND = BLOCK / STRIDE` in both the FlexAttention mask and the
+fusion offsets. Patching only the mask has no effect, because the fusion keeps
+reading slot `p + 1`.
 
 Measured on the real model (`verify_leakage_map.py`, T = 256, random weights,
 since self-exclusion is structural; `run_leakage_check.sh` runs both cases):
@@ -76,13 +76,13 @@ since self-exclusion is structural; `run_leakage_check.sh` runs both cases):
 | 128 | 128–131 | 0 | 31.2 | 58.7 | 82.1 | 195 |
 | 251 | 251–254 | 0 | 63.4 | 168.0 | 322.0 | 543 |
 
-Exactly one base out of four stays protected with the old band, and the leakage
-grows with `j`: the base furthest from the forward branch is the one the
+With the old band only one base out of four stays protected, and the leakage
+grows with `j`, because the base furthest from the forward branch is the one the
 backward branch summarises best.
 
 ## Interface
 
-Three parameters replace the single `S` of v1:
+These parameters replace the single `S` of v1:
 
 ```
 STEM_STRIDE   grid compression      (1 = none)
@@ -91,7 +91,7 @@ STEM_NSTAGES  number of stem stages (stride=1 only; default 2)
 STEM_KERNEL   convolution kernel    (default 7)
 ```
 
-`STEM_STRIDE = STEM_BLOCK` reproduces v1 exactly: `verify_patches.py` checks
+`STEM_STRIDE = STEM_BLOCK` reproduces v1 exactly; `verify_patches.py` checks
 that with `BAND = 1` every parametrised expression evaluates to the original
 constant.
 
@@ -99,7 +99,7 @@ constant.
 # reproduction of the v1 S=4 run
 JANUS_STEM_GATE=1 STEM_STRIDE=4 STEM_BLOCK=4 ./run_stem_experiment.sh
 
-# counter-proof: MUST fail with a leakage assertion
+# negative control: must fail with a leakage assertion
 JANUS_STEM_GATE=1 STEM_STRIDE=1 STEM_BLOCK=4 \
   JANUS_STEM_BAND_OVERRIDE=1 ./run_stem_experiment.sh
 
@@ -110,31 +110,31 @@ JANUS_STEM_GATE=1 STEM_STRIDE=1 STEM_BLOCK=4 STEM_NSTAGES=3 \
 
 ## Reading the metrics
 
-**The token counter is inflated 4x at step 1.** It counts predictions, not
-nucleotides: each base is predicted four times. Comparing two runs on
-`num_tokens` would stop the step-1 run at a quarter of the data. Parity is on
+The token counter is inflated 4x at step 1, because it counts predictions, not
+nucleotides, and each base is predicted four times. Comparing two runs on
+`num_tokens` would stop the step-1 run at a quarter of the data; parity is on
 steps, batches and bases, which `MAX_STEPS = 50000` guarantees.
 
-**`main_loss` is a mean over 4x predictions** with fourfold redundancy, so it is
-not directly comparable between the step-1 run and `S = 4`.
+`main_loss` is a mean over four times as many predictions, with fourfold
+redundancy, so it is not directly comparable between the step-1 run and `S = 4`.
 
-**The logged perplexity is `exp(main_loss + moe_loss)`**, which includes the
+The logged perplexity is `exp(main_loss + moe_loss)`, which includes the
 auxiliary load-balancing term of the experts. With `moe_loss` ≈ 0.8 it would
 overestimate the perplexity by a factor e^0.8 ≈ 2.2; the correct quantity is
 `exp(main_loss)`.
 
-**Validation and test losses are computed on the minor scaffolds reserved to
-those splits**, largely repetitive and easier to predict than the training
-corpus. `test/loss` is therefore not an absolute yardstick across splits, though
-it remains valid across runs.
+Validation and test losses are computed on the minor scaffolds reserved to those
+splits, which are largely repetitive and easier to predict than the training
+corpus, so `test/loss` can be compared between runs but not with the training
+loss.
 
 ## Results
 
-The run completed its 50,000 steps. The prediction recorded above held in its
-second branch: the NMI against GC stays at 0.2759, against 0.2591 for `S = 4` and
-0.4038 for the baseline, so 88% of the attenuation survives the return to the
-full grid and grid compression is not its cause. Window and objective remain
-confounded; the fourth cell (`STEM_BLOCK=1`) was not run.
+The run completed its 50,000 steps. The NMI against GC stays at 0.2759, against
+0.2591 for `S = 4` and 0.4038 for the baseline, so 88% of the attenuation
+survives the return to the full grid and grid compression is not its cause.
+Window and objective are still confounded; the fourth cell (`STEM_BLOCK=1`) was
+not run.
 
 | | NMI vs GC | LDA η² | probe MCC (configuration 2) | LoRA MCC (saturated) |
 |---|---:|---:|---:|---:|
@@ -152,7 +152,7 @@ per-dimension GC analysis.
 ## Measured cost
 
 About 144 hours of compute for the step-1 run against 69 for `S = 4` on one
-H100, a ratio of **2.1x**, much lower than the asymptotic complexity suggests
+H100, a ratio of 2.1x, much lower than the asymptotic complexity suggests
 (linear in the backbone, quadratic in the fusion layer).
 
 ## Verification

@@ -8,7 +8,7 @@ genomic language models (gLMs) pre-trained on the human genome transfer to
 *Aptenodytes patagonicus* (king penguin, RefSeq `GCF_965638725.1`), and whether
 pre-training from scratch on the target genome closes the gap.
 
-Two architectures are studied side by side under an identical downstream protocol:
+Two architectures are compared under the same downstream protocol:
 
 | Model | Architecture | Sizes used |
 |---|---|---|
@@ -19,57 +19,49 @@ The thesis also contains an exploratory study with Evo 2 (per-base
 log-likelihood across functional categories). It ran on a different cluster, and
 neither its code nor its outputs are part of this repository.
 
----
-
 ## The main result
 
-**Zero-shot gLM embeddings organise by GC content, not by biological function.**
-Clustering (k-means, k = 4) the frozen embeddings of 120,000 genomic windows
-recovers nucleotide composition far more strongly than the functional
-annotation:
+The frozen embeddings of the gLMs are organised mainly by GC content. Clustering
+the embeddings of 120,000 genomic windows with k-means (k = 4) recovers
+nucleotide composition far more strongly than the functional annotation:
 
 | Embedding | NMI vs. function | NMI vs. GC | NMI vs. repeats | silhouette |
 |---|---:|---:|---:|---:|
 | CrossDNA-519M (human) | 0.0175 | 0.518 | 0.044 | 0.227 |
 | JanusDNA-144 (human) | 0.0192 | 0.182 | 0.027 | 0.187 |
 
-The functional signal is nonetheless *present*: it is simply not the dominant
-axis of the latent geometry. A supervised probe extracts it, and LoRA
-domain adaptation extracts substantially more. The dissociation between
-unsupervised geometry and extractable information is the central claim of the
-thesis. The window-length sweep and the step-1 run below are its clearest
-demonstrations.
-
----
+The functional signal is still there, but it is not the main axis of the latent
+geometry. A supervised probe extracts part of it, and LoRA domain adaptation
+extracts considerably more. This gap between the unsupervised geometry and the
+information a classifier can extract is the central claim of the thesis; the
+window-length sweep and the step-1 run below show it most directly.
 
 ## Task and data
 
-**Task.** 4-way classification of functional elements (CDS, UTR, intron,
+The task is 4-way classification of functional elements (CDS, UTR, intron,
 intergenic) derived from the RefSeq GFF annotation.
 
-**Windows.** 120,000 fixed-length windows, balanced across the four classes
-(30,000 each). Labels are assigned by the *centre* of the window, and UTRs are
-derived as mRNA exons minus CDS rather than read directly from the GFF.
+The dataset has 120,000 fixed-length windows, balanced across the four classes
+(30,000 each). Each window is labelled by its centre, and UTRs are derived as
+mRNA exons minus CDS instead of being read directly from the GFF.
 
-**Split.** Chromosome-disjoint 80k / 20k / 20k (train / val / test). Every
-scaffold belongs to exactly one split, so no genomic region is shared across
+The split is chromosome-disjoint, 80k / 20k / 20k (train / val / test). Every
+scaffold belongs to exactly one split, so no genomic region is shared between
 splits.
 
-**Confounder audit.** GC content, soft-masked repeat fraction and N fraction are
-recorded per window and used both as an explicit baseline and as a colouring
-variable in the projections. This is what makes the GC result above measurable
-rather than anecdotal.
-
----
+GC content, soft-masked repeat fraction and N fraction are recorded for every
+window and used both as an explicit baseline and to colour the projections, so
+the effect of GC can be measured directly.
 
 ## Results
 
-All figures below are on the held-out test set (20,000 windows), window length
-L = 1000 bp unless stated otherwise. MCC = Matthews correlation coefficient.
+All values below are on the held-out test set (20,000 windows), with window
+length L = 1000 bp unless stated otherwise. MCC is the Matthews correlation
+coefficient.
 
-**Two probe configurations.** Frozen embeddings are scored with a two-layer MLP
-(hidden 256) in one of two configurations. Values are compared only within the
-same configuration, and with the compositional reference computed in it:
+Frozen embeddings are scored with a two-layer MLP (hidden size 256) in one of two
+configurations. Values are compared only within the same configuration, and
+against the compositional reference computed in it:
 
 | | script | dropout | max epochs | patience | used for |
 |---|---|---:|---:|---:|---|
@@ -77,8 +69,8 @@ same configuration, and with the compositional reference computed in it:
 | configuration 2 | `src/mlp_probe.py` | 0.3 | 60 | 8 | the GC-attractor analyses (stem sweep and step-1 run) |
 
 The test MCC has a sampling uncertainty of about ±0.009 (95% interval, bootstrap
-on the confusion matrices): differences below about 0.015 between single runs are
-not read as significant.
+on the confusion matrices), so differences below about 0.015 between single runs
+are not read as significant.
 
 ### Baselines
 
@@ -92,9 +84,9 @@ not read as significant.
 
 The repeat fraction comes from the soft-masking of the FASTA, which the
 tokenizer removes, so the trivial baseline is read between its two values. The
-fair bar for an embedding is composition scored with the same classifier: 0.301
-(configuration 1) or 0.297 (configuration 2). The random forest figure
-understates it. `src/kmer_mlp_baseline.py` produces both MLP rows.
+reference for an embedding is composition scored with the same classifier, 0.301
+in configuration 1 and 0.297 in configuration 2; the random forest value
+underestimates it. `src/kmer_mlp_baseline.py` produces both MLP rows.
 
 ### Zero-shot (frozen embeddings, probe configuration 1)
 
@@ -119,7 +111,7 @@ Pre-training on the penguin genome against the human checkpoint, 4 seeds:
 
 Against the 4-mer probe at 0.301, only JanusDNA-144 pre-trained on the penguin
 genome is clearly above composition; the models pre-trained on the human genome
-are at its level or below. In-domain pre-training helps, but modestly.
+are at its level or below, so in-domain pre-training helps, but modestly.
 `analysis/audit_results.py` flags any feature that has been evaluated under more
 than one protocol.
 
@@ -141,15 +133,15 @@ repeated with the larger budget.
 After adaptation the in-domain advantage behaves differently in the two
 architectures: for JanusDNA-144 it is reabsorbed (+0.013 zero-shot, +0.002 after
 LoRA with the extended budget), for CrossDNA-8.1M it is amplified (+0.019
-zero-shot, +0.036 after LoRA). The two LoRA values come from different budgets:
-at 10 epochs, the budget used for CrossDNA, the JanusDNA advantage was +0.018
+zero-shot, +0.036 after LoRA). The two LoRA values come from different budgets.
+At 10 epochs, the budget used for CrossDNA, the JanusDNA advantage was +0.018
 (0.4028 against 0.3848), and it vanished only when adaptation was carried to
 saturation.
 
 ### Window-length sweep
 
-The same protocol run at eight window lengths, on JanusDNA-144 pre-trained
-from scratch on the clean penguin corpus:
+The same protocol, run at eight window lengths on JanusDNA-144 pre-trained from
+scratch on the clean penguin corpus:
 
 | L (bp) | zero-shot MCC | LoRA MCC | LoRA gain | 4-mer | NMI vs. function | NMI vs. GC |
 |---:|---:|---:|---:|---:|---:|---:|
@@ -168,45 +160,37 @@ values after LoRA are lower bounds. The 4-mer column is the compositional
 baseline at the same length. `analysis/make_figure_window_sweep.py` aggregates
 the `out_L*/` directories and draws the figure.
 
-1. **At L = 64, LoRA adds nothing at all** (−0.0009). At L = 2000 it adds
-   +0.1013.
-2. **NMI against GC is flat** (0.4002 to 0.4190) across the entire sweep, while
-   supervised MCC nearly doubles. The latent geometry does not reorganise; the
-   information becomes *extractable* without becoming *dominant*.
-3. After LoRA the model stays between 1.32 and 1.72 times the 4-mer baseline at
-   the same length.
-
----
+At L = 64 LoRA adds nothing (−0.0009), at L = 2000 it adds 0.1013. The NMI
+against GC stays between 0.4002 and 0.4190 over the whole sweep while the
+supervised MCC nearly doubles, so the information becomes easier to extract
+without the latent geometry reorganising around it. After LoRA the model stays
+between 1.32 and 1.72 times the 4-mer baseline at the same length.
 
 ## The causal convolutional stem experiment
 
-**Question.** Is the GC attractor a consequence of single-nucleotide
-tokenisation? If the model reasons over super-tokens instead of single bases,
-does the latent space stop being organised by composition?
+This experiment tests whether the GC attractor comes from single-nucleotide
+tokenisation, that is, whether a model that works on super-tokens instead of
+single bases still organises its latent space by composition.
 
-**Design.** A causal down-sampling stem (stride-2 stages of kernel 7) inserted
-before the JanusDNA Mamba+MoE backbone, giving compression S with a receptive
-field of 19 bp at S = 4, 43 bp at S = 8 and 91 bp at S = 16 (measured with the
-Jacobian of the stem output rather than taken from the formula:
-`stem/verify_theory.py`). Three architectural invariants were
-verified before any run: the backward stream uses flip-based weight tying (one
-stem, not two), the Janus loss is non-shifted, and LayerNorm is per-position and
-therefore causally safe. A standalone gate proves causality through the
-Jacobian, and a full-model gate (`stem/test_stem_wiring.py`) confirms the stem
-preserves Janus self-exclusion.
+A causal down-sampling stem (stride-2 stages of kernel 7) is inserted before the
+JanusDNA Mamba+MoE backbone. It compresses the sequence by a factor S, with a
+receptive field of 19 bp at S = 4, 43 bp at S = 8 and 91 bp at S = 16, measured
+with the Jacobian of the stem output rather than taken from the formula
+(`stem/verify_theory.py`). A standalone gate checks causality through the
+Jacobian, and a full-model gate (`stem/test_stem_wiring.py`) confirms that the
+stem preserves Janus self-exclusion.
 
-**Falsifiable prediction, stated in advance.** An improvement in the
-NMI(function)/NMI(GC) *ratio* would indicate a mechanistic gain; an improvement
-in MCC alone would indicate a merely computational one.
+The ratio NMI(function)/NMI(GC) was fixed in advance as the metric for comparing
+the scales.
 
-**Budget.** Identical for every scale: about 52 billion bases, `max_length=131072`,
-50,000 steps, `global_batch=8`, `lr=8e-3`, bf16-mixed, one H100. The budget is
-identical *across the scales*, not with the baseline: the baseline runs 15,000
-steps and ends near its own optimum, while the stem runs end past theirs (see
-[Known issues](#known-issues); `tools/check_budgets.py` reads the step count from
-each checkpoint). Note also that the logged `num_tokens` counts *predictions*,
-which equals nucleotides only when the grid stride matches the predicted block;
-see [Separating grid compression from the objective](#separating-grid-compression-from-the-objective).
+Every scale gets the same budget: about 52 billion bases, `max_length=131072`,
+50,000 steps, `global_batch=8`, `lr=8e-3`, bf16-mixed, one H100. The baseline is
+not budget-matched, since it runs 15,000 steps and ends near its own optimum,
+while the stem runs end past theirs (see [Known issues](#known-issues);
+`tools/check_budgets.py` reads the step count from each checkpoint). The logged
+`num_tokens` counts predictions, which equal nucleotides only when the grid
+stride matches the predicted block (see
+[Separating grid compression from the objective](#separating-grid-compression-from-the-objective)).
 
 ### Sweep over the compression scale
 
@@ -221,23 +205,21 @@ LoRA at saturation, except *S = 16 (10 epochs: its saturated run was not
 completed). S = 32 was pre-trained but is excluded from the downstream comparison;
 see [The S = 32 exclusion](#the-s--32-exclusion).
 
-**The scales are not equivalent, and S = 4 is an optimum.** Three readings:
+Extractability falls monotonically with compression in both regimes: frozen
+probe 0.324 → 0.292 → 0.259, after LoRA 0.389 → 0.367 at saturation and 0.331
+for S = 16. Only S = 4 matches the baseline on frozen embeddings, and after
+adaptation the gap from the baseline grows with S (−5.0% at S = 4 and −10.5% at
+S = 8, LoRA at saturation), so adaptation does not recover what compression
+loses.
 
-1. **Extractability degrades monotonically with compression**, in both regimes:
-   frozen probe 0.324 → 0.292 → 0.259, after LoRA 0.389 → 0.367 at saturation
-   and 0.331 for S = 16. Only S = 4 matches the baseline on frozen embeddings.
-2. **After adaptation the gap from the baseline persists and grows with S**:
-   −5.0% at S = 4 and −10.5% at S = 8 with LoRA at saturation. Compression
-   costs information that in-domain adaptation does not recover.
-3. **Reducing GC is not the same as improving.** S = 16 weakens the GC attractor
-   more than any other scale (0.2187, −46% from baseline) and loses on
-   everything else, including the lowest NMI vs function of the whole sweep. It
-   is flattening the representation, not purifying it.
+A weaker GC attractor does not mean a better representation. S = 16 weakens it
+more than any other scale (0.2187, −46% from the baseline) and has the lowest
+NMI against function of the whole sweep. On the ratio fixed in advance, S = 4
+(0.224) is ahead of S = 8 and S = 16 (both about 0.18) and almost doubles the
+baseline (0.114), with a much higher silhouette, yet after LoRA it stays about
+0.02 MCC below the baseline.
 
-The ratio declared in advance as the discriminating metric picks out S = 4
-(0.224) clearly over S = 8 and S = 16 (both ~0.18).
-
-### Why S = 16 wins on GC and loses on everything else
+### Why S = 16 has the lowest NMI against GC
 
 | Scale | var. PC1 | eff. dim (80%) | PC2 corr. GC | mean corr. GC | LDA η² | silhouette |
 |---|---:|---:|---:|---:|---:|---:|
@@ -246,57 +228,39 @@ The ratio declared in advance as the discriminating metric picks out S = 4
 | S = 8 | 0.807 | **1** | 0.908 | 0.286 | 0.3654 | 0.387 |
 | S = 16 | 0.809 | **1** | 0.928 | 0.240 | 0.3039 | 0.437 |
 
-Two facts contradict any extrapolation from NMI alone. **PC2's correlation with
-GC rises** for S = 8 and S = 16 (0.908, 0.928 against the baseline's 0.880): the
-dominant axis becomes *more* GC-centric, not less. And **the representation
-collapses**: PC1 alone explains 81% of the variance and the effective
-dimensionality falls to one.
+For S = 8 and S = 16 the NMI alone is misleading. The correlation of PC2 with GC
+rises (0.908 and 0.928, against 0.880 for the baseline), so the dominant axis
+becomes more tied to GC, and the representation collapses, with PC1 alone
+explaining 81% of the variance and the effective dimensionality falling to one.
+At high compression GC is spread over fewer dimensions (mean correlation 0.286
+and 0.240) and concentrated in the dominant axis together with everything else,
+so the lower NMI against GC at S = 16 reflects a poorer representation.
 
-At high compression GC becomes less *diffuse* (mean correlation 0.286 and 0.240)
-but more *concentrated* in the dominant axis, together with everything else. The
-falling NMI vs GC at S = 16 is therefore a symptom of an impoverished
-representation, not of a purified one.
-
-**S = 4 is the only scale that reorganises without collapsing**: it keeps
-dimensionality, reduces the GC axis, and preserves the baseline's linear
-extractability (LDA η² 0.4064 against 0.4035).
-
-### Verdict against the prediction
-
-At S = 4, **mechanistic gain without computational gain**. The stem measurably
-weakens the GC attractor (the function/GC ratio nearly doubles, the clusters
-separate far better) and none of it converts into downstream accuracy, while
-under LoRA it costs about 0.02 MCC. That is a negative result on the metric that
-matters practically, and a positive one on the metric the experiment was
-designed to test. Beyond S = 4 both gains disappear together.
-
-**Consequence for the multi-scale idea.** The premise of an Inception-style
-multi-scale stem holds (the scales do behave differently), but the data show no
-*complementarity*: no scale captures function better than the others, and all
-degrade as S grows. A module fusing S ∈ {4, 8, 16} would combine one good
-extractor with two that degrade extractability.
+S = 4 is the only compressed scale that changes the geometry without collapsing
+it. Its effective dimensionality stays at 2, the correlation of PC2 with GC drops
+to 0.739, and the linear extractability matches the baseline (LDA η² 0.4064
+against 0.4035).
 
 ### Separating grid compression from the objective
 
-The sweep above leaves a confound. Going from the baseline to the `S = 4` stem
-changes three things at once:
+Going from the baseline to the `S = 4` stem changes three things at once, so the
+attenuation of the GC attractor could come from any of them:
 
 | | grid (per 1000 bp window) | window seen per position | bases predicted |
 |---|---:|---:|---:|
 | baseline | 1000 | 1 | 1 |
 | stem S = 4 | 250 | 19 bp | 4 |
 
-The measured attenuation of the GC attractor is therefore attributable to any of
-the three.
+The `S = 4` stem did not see disjoint 4-base blocks. Two stride-2 convolutions
+with kernel 7 give a 19 bp receptive field, so adjacent super-tokens overlap by
+15 bases; only the prediction targets were disjoint.
 
-Note also that the `S = 4` stem did **not** see disjoint 4-base blocks. Two
-stride-2 convolutions with kernel 7 give a 19 bp receptive field, so adjacent
-super-tokens overlap by 15 bases. Only the prediction *targets* were disjoint.
+#### The step-1 run
 
-**The step-1 run.** Running the same stem at stride 1 restores the baseline grid
-density while holding the receptive field and the objective fixed, which isolates
-grid compression alone. The receptive field is kept at 19 bp with three stride-1
-stages of kernel 7 (`RF = 1 + n_stages·(kernel − 1)`).
+Running the same stem at stride 1 restores the baseline grid density while
+keeping the receptive field and the objective fixed, so it isolates grid
+compression. The receptive field stays at 19 bp with three stride-1 stages of
+kernel 7 (`RF = 1 + n_stages·(kernel − 1)`).
 
 | configuration | grid | window | stem parameters |
 |---|---:|---:|---:|
@@ -304,12 +268,13 @@ stages of kernel 7 (`RF = 1 + n_stages·(kernel − 1)`).
 | **step 1 (3 stages k=7, stride 1)** | **1000** | **19 bp** | **436,752** |
 
 The two 19 bp configurations differ in depth and parameter count (a further
-0.4% of the total capacity). No two-stage stride-1 stem reaches 19 bp, so this is unavoidable
-and is stated rather than glossed over.
+0.4% of the total capacity). No two-stage stride-1 stem reaches 19 bp, so the
+difference cannot be avoided.
 
-**The exclusion band had to be parametrised.** JanusDNA's self-exclusion comes
-from the offsets in the final fusion (`final_fusion_repos_formasked`, active when
-`layer_fusion_strategy = "pool"`):
+#### The exclusion band
+
+JanusDNA's self-exclusion comes from the offsets in the final fusion
+(`final_fusion_repos_formasked`, active when `layer_fusion_strategy = "pool"`):
 
 ```
 fused[p] = hidden[p - 1] + hidden[mid_len + p + BAND]
@@ -317,20 +282,19 @@ fused[p] = hidden[p - 1] + hidden[mid_len + p + BAND]
 
 The forward branch at `p - 1` summarises everything before `p`, the backward
 branch at `p + BAND` everything from `p + BAND` on, and the loss is a plain
-unshifted cross-entropy: the prediction is encoded entirely in these offsets.
-`BAND` is hardcoded to 1 upstream, **in grid cells**. At `S = 4` one cell is
-worth four bases, so the band happened to cover the whole predicted block. At
+unshifted cross-entropy, so the prediction is encoded entirely in these offsets.
+Upstream, `BAND` is hardcoded to 1 and counted in grid cells. At `S = 4` one cell
+is worth four bases, so the band happened to cover the whole predicted block. At
 stride 1 a cell is worth one base while the block is still four, so three of the
-four target bases would be visible to the backward branch: the model would copy
-rather than predict, with a lower loss, better-looking curves and no error on
-screen.
+four target bases would be visible to the backward branch, and the model would
+copy them instead of predicting them, with a lower loss and no error raised.
 
-The parametrisation is `BAND = BLOCK / STRIDE`, applied in the FlexAttention mask
-*and* in the fusion offsets. Patching the mask alone has no effect: the fusion
-keeps picking slot `p + 1` regardless.
+The fix sets `BAND = BLOCK / STRIDE` in both the FlexAttention mask and the
+fusion offsets. Patching only the mask has no effect, because the fusion keeps
+reading slot `p + 1`.
 
 Measured on the real model with `stem/verify_leakage_map.py` (T = 256, random
-weights, since self-exclusion is structural and independent of training;
+weights, since self-exclusion is structural and does not depend on training;
 `stem/run_leakage_check.sh` runs both cases with a fixed seed):
 
 | position | target bases | j = 0 | j = 1 | j = 2 | j = 3 | context |
@@ -344,21 +308,23 @@ weights, since self-exclusion is structural and independent of training;
 | 128 | 128–131 | 0 | 31.2 | 58.7 | 82.1 | 195 |
 | 251 | 251–254 | 0 | 63.4 | 168.0 | 322.0 | 543 |
 
-Exactly one base out of four stays protected with the old band, and the leakage
-grows with `j`: the base furthest from the forward branch is the one the backward
-branch summarises best.
+With the old band only one base out of four stays protected, and the leakage
+grows with `j`, because the base furthest from the forward branch is the one the
+backward branch summarises best.
 
-**Falsifiable prediction, stated in advance.** If the NMI against GC returns
-towards the baseline 0.404, the attenuation was grid compression and the
-attribution to the stem must be rewritten. If it stays near 0.259, compression is
-irrelevant, but window and objective remain confounded with each other, since
-both separate the baseline from either stem run.
+#### Prediction and result
 
-**Result.** The attenuation is preserved at **88%**: restoring the baseline grid
-density moves the NMI against GC from 0.2591 to 0.2759, against 0.4038 for the
-baseline. Grid compression is not the cause. The second branch of the prediction
-holds, and the attribution to the block objective remains undemonstrated, since
-window and objective are still confounded with each other.
+The prediction was fixed before the run. If the NMI against GC went back towards
+the baseline value of 0.404, the attenuation would be due to grid compression
+and the attribution to the stem would have to be rewritten. If it stayed near 0.259,
+compression would be irrelevant, with window and objective still confounded with
+each other, since both separate the baseline from either stem run.
+
+The run keeps 88% of the attenuation. Restoring the baseline grid density moves
+the NMI against GC from 0.2591 to 0.2759, against 0.4038 for the baseline. Grid
+compression is not the cause. The second branch of the prediction holds, and the
+attribution to the block objective is still not demonstrated, because window and
+objective are confounded.
 
 | | NMI vs GC | LDA η² | LDA1 corr. GC | probe MCC (config. 2) | LoRA MCC (saturated) |
 |---|---:|---:|---:|---:|---:|
@@ -370,48 +336,48 @@ window and objective are still confounded with each other.
 | **step 1** | 0.2759 | **0.5070** | **0.258** | **0.3687** | **0.4136** |
 | 4-mer composition, MLP probe | | | | 0.297 ± 0.002 | |
 
-**On frozen embeddings step 1 is the most informative model.** It is the only
-run that attenuates GC *and* makes the functional signal more extractable: LDA η²
+On frozen embeddings step 1 is the most informative model, and the only run that
+both attenuates GC and makes the functional signal easier to extract: LDA η²
 +25.7% over the baseline, probe MCC +14.1%, and the LDA axis least correlated
 with GC (0.258 against 0.287 for the baseline and 0.292 for `S = 4`). The
-`S = 4` stem achieved only the first (LDA η² +0.7%, MCC +0.2%). A linear
-discriminant and a non-linear MLP probe agree in direction and magnitude.
+`S = 4` stem achieved only the first (LDA η² +0.7%, MCC +0.2%). The linear
+discriminant and the non-linear MLP probe agree in direction and magnitude.
 Against the 4-mer probe of the same configuration (0.297 ± 0.002) the baseline
 and `S = 4` are about 0.026 above, `S = 8` is at its level and `S = 16` falls
 below it (−0.038).
 
-**After adaptation the differences close.** With LoRA run to saturation, step 1
-leads the baseline by +1.0% (0.4136 against 0.4096), within the bootstrap
-uncertainty of the test MCC (about ±0.009). The same gradient appears in every
-comparison: largest on the linear analysis, intermediate on the probe, smallest
-after LoRA. Step 1 against the baseline: +25.7%, +14.1%, +1.0%. The human
-checkpoint against the baseline: −15.5%, −2.6%, −0.4%. The more freedom the
+After adaptation the differences shrink. With LoRA at saturation step 1 is 1.0%
+above the baseline (0.4136 against 0.4096), within the bootstrap uncertainty of
+the test MCC (about ±0.009). Every comparison follows the same pattern, with the
+largest difference on the linear analysis, a smaller one on the probe and the
+smallest after LoRA: +25.7%, +14.1% and +1.0% for step 1 against the baseline,
+−15.5%, −2.6% and −0.4% for the human checkpoint. The more freedom the
 adaptation has, the more it compensates for the starting representation, so the
 effect of a tokenisation is best measured on frozen embeddings.
 
-**A low NMI against GC is not a goal in itself.** The released human checkpoint
-has the least GC-dominated embeddings of anything measured (0.1824) and less
+A low NMI against GC is not useful in itself. The released human checkpoint has
+the least GC-dominated embeddings of all the models measured (0.1824), but less
 functional signal on frozen embeddings than the from-scratch baseline (LDA η²
-−15.5%). What makes step 1 meaningful is not that it has the least GC (it does
-not) but that it is the only model that lowers GC *and* raises extractability.
+−15.5%). Step 1 stands out because it is the only model that lowers GC and raises
+extractability at the same time.
 
-**GC is redistributed, never removed.** A ridge regression recovers GC from the
-embeddings with held-out R² between 0.996 and 0.998 in every model. The share of
-variance along the GC direction does not follow the NMI: 1.3% for the baseline,
-2.1% for `S = 4`, 3.5% for the human checkpoint and 0.7% for step 1, the share of an arbitrary direction (1/144).
-A redistribution of variance away from GC is therefore documented for step 1
-only; the other models lower the NMI through different geometric routes
-(`analysis/gc_per_dimension.py`). The step-1 geometry differs from `S = 4`: PC2
-stays at 0.902 correlation with GC (0.739 at `S = 4`), PC1 rises to 0.707 of the
-variance and the effective dimensionality falls from 3 to 2.
+GC is never removed. A ridge regression recovers it from the embeddings with
+held-out R² between 0.996 and 0.998 in every model. The share of variance along
+the GC direction does not follow the NMI: 1.3% for the baseline, 2.1% for
+`S = 4`, 3.5% for the human checkpoint and 0.7% for step 1, which is the share
+of an arbitrary direction (1/144). A redistribution of variance away from GC is
+therefore shown only for step 1; the other models lower the NMI through
+different geometric routes (`analysis/gc_per_dimension.py`). In the step-1
+geometry PC2 stays at 0.902 correlation with GC (0.739 at `S = 4`), PC1 rises to
+0.707 of the variance and the effective dimensionality falls from 3 to 2.
 
-**The choice of checkpoint does not matter.** The test-loss minimum is saved as
-`checkpoints/test/loss.ckpt` (epoch 50). Extracting from it instead of the final
-checkpoint (epoch 55), the test loss worsens by 11% while the NMI against GC
-moves by 1.2% (0.2726 against 0.2759), a little over 2% of the gap between
-baseline and `S = 4`.
+The choice of checkpoint does not change the result. The test-loss minimum is
+saved as `checkpoints/test/loss.ckpt` (epoch 50); between it and the final
+checkpoint (epoch 55) the test loss worsens by 11% while the NMI against GC moves
+by 1.2% (0.2726 against 0.2759), a little over 2% of the gap between baseline
+and `S = 4`.
 
-**Compression damages extractability on both metrics.**
+Compression lowers extractability on both metrics:
 
 | compression | probe MCC (config. 2) | LoRA MCC | LoRA vs baseline |
 |---|---:|---:|---:|
@@ -420,58 +386,57 @@ baseline and `S = 4`.
 | S = 8 | 0.2920 | 0.3666 | −10.5% |
 | S = 16 | 0.2594 | 0.3309 (10 epochs) | |
 
-**Still open.** Window and objective remain confounded. The fourth cell of the
-design (stride 1, 19 bp, a single-base head: `STEM_BLOCK=1`) would separate them
-and is supported by the code unchanged, but it was not run in this work. The
-comparison of step 1 with `S = 4` is budget-matched (50,000 steps each); the
-comparison with the baseline is not (15,000 steps).
+Window and objective are still confounded. The fourth cell of the design
+(stride 1, 19 bp, a single-base head: `STEM_BLOCK=1`) would separate them; the
+code supports it as it is, but it was not run in this work. Step 1 and `S = 4`
+are budget-matched (50,000 steps each), step 1 and the baseline are not (15,000
+steps).
 
-**Measured cost.** About 144 hours of compute against 69 for `S = 4` on one H100,
-a ratio of **2.1x**, much lower than the asymptotic complexity suggests (linear in
-the backbone, quadratic in the fusion layer).
+The step-1 run took about 144 hours of compute against 69 for `S = 4` on one
+H100, a ratio of 2.1x, much lower than the asymptotic complexity suggests
+(linear in the backbone, quadratic in the fusion layer).
 
-**Reading the metrics at stride 1.** Three quantities change meaning and are easy
-to misread:
+#### Reading the metrics at stride 1
 
-- **The token counter is inflated 4x.** It counts predictions, not nucleotides:
-  each base is predicted four times, once per offset. Comparing runs on
-  `num_tokens` would stop the step-1 run at a quarter
-  of the data. Parity is on steps, batches and bases, which `MAX_STEPS = 50000`
-  guarantees.
-- **`main_loss` is a mean over 4x predictions.** The marginal distribution of
-  prediction horizons is identical between the two setups (each base gets
-  forward horizon `j+1` and backward horizon `4−j`, uniform over `j = 0..3`), but
-  the quantity is not bits-per-nucleotide in the baseline sense.
-- **The logged perplexity is `exp(main_loss + moe_loss)`**, which includes the
+Three logged quantities mean something different at stride 1:
+
+- The token counter counts predictions, not nucleotides, so it is inflated 4x,
+  since each base is predicted four times, once per offset. Comparing runs on
+  `num_tokens` would stop the step-1 run at a quarter of the data; parity is on
+  steps, batches and bases, which `MAX_STEPS = 50000` guarantees.
+- `main_loss` is a mean over four times as many predictions. The marginal
+  distribution of prediction horizons is the same in the two setups (each base
+  gets forward horizon `j+1` and backward horizon `4−j`, uniform over
+  `j = 0..3`), but the quantity is not bits-per-nucleotide in the baseline sense.
+- The logged perplexity is `exp(main_loss + moe_loss)`, which includes the
   auxiliary load-balancing term of the experts. With `moe_loss` ≈ 0.8 it would
   overestimate the perplexity by a factor e^0.8 ≈ 2.2; the meaningful quantity is
-  `exp(main_loss)`. This applies to every run in this repository, not only the
+  `exp(main_loss)`. This applies to every run in this repository, not only to the
   stride-1 one.
 
-**Validation and test losses are computed on the minor scaffolds reserved to
-those splits**, largely repetitive and easier to predict than the training
-corpus. `test/loss` is therefore not an absolute yardstick across splits, though
-it remains valid across runs.
+Validation and test losses are computed on the minor scaffolds reserved to those
+splits, which are largely repetitive and easier to predict than the training
+corpus, so `test/loss` can be compared between runs but not with the training
+loss.
 
 ### The S = 32 exclusion
 
 With 1000 bp windows the compressed grid falls to M = 32, below FlexAttention's
 floor of M ≥ 64 (JanusDNA's `final_attention` sets `q_len = 2M` against a default
-`BLOCK_SIZE` of 128). Two routes around it were tested, and both were subjected
-to a neutrality gate rather than assumed:
+`BLOCK_SIZE` of 128). Two workarounds were tested, each against a neutrality
+gate:
 
-- **Lowering `BLOCK_SIZE`** (`stem/gates/gate_flexblock_neutrality.sh`):
-  **rejected**. Minimum per-row cosine 0.937, 21% relative difference. It is not
-  a re-tiling of the same computation in this build.
-- **Padding to 64·S** (`stem/gates/test_impatto_padding.sh`): padding the
-  window from 1000 to 1024 bp (2.4%, what S = 16 needs) leaves the NMI vs GC
-  unchanged to the fourth decimal, so it is **neutral**; padding to 2048 bp (51%,
-  what S = 32 needs) moves it by 5.1%, comparable to the effect under study, so it
-  is **not neutral**.
+- Lowering `BLOCK_SIZE` (`stem/gates/gate_flexblock_neutrality.sh`) was
+  rejected: minimum per-row cosine 0.937 and 21% relative difference, so in this
+  build it is not a re-tiling of the same computation.
+- Padding to 64·S (`stem/gates/test_impatto_padding.sh`): padding the window
+  from 1000 to 1024 bp (2.4%, what S = 16 needs) leaves the NMI against GC
+  unchanged to the fourth decimal, while padding to 2048 bp (51%, what S = 32
+  needs) moves it by 5.1%, comparable to the effect under study.
 
-So S = 16 is included with validated padding and S = 32 is excluded. Its
-pre-training is valid and its losses are reported, but no downstream number from
-it would be comparable with the rest.
+S = 16 is therefore included, padded to 1024 bp, and S = 32 is excluded. Its
+pre-training is valid and its losses are reported, but its downstream numbers
+would not be comparable with the others.
 
 ### Applying the patch
 
@@ -485,7 +450,7 @@ and should stay reproducible.
 
 `stem/run_stem_experiment.sh` is the v2 patcher, used for anything new. It
 applies six patch-or-die modifications to `modeling_janusdna.py` and two to
-`train.py`, and takes three parameters instead of one:
+`train.py`, and replaces the single S of v1 with these parameters:
 
 ```
 STEM_STRIDE   grid compression      (1 = none)
@@ -494,15 +459,15 @@ STEM_NSTAGES  number of stem stages (stride=1 only; default 2)
 STEM_KERNEL   convolution kernel    (default 7)
 ```
 
-`STEM_STRIDE = STEM_BLOCK` reproduces v1 exactly, and this is checked rather than
-asserted: `stem/verify_patches.py` confirms that with `BAND = 1` every
-parametrised expression evaluates to the original constant.
+`STEM_STRIDE = STEM_BLOCK` reproduces v1 exactly; `stem/verify_patches.py`
+checks that with `BAND = 1` every parametrised expression evaluates to the
+original constant.
 
 ```bash
 # reproduce the v1 S = 4 run
 JANUS_STEM_GATE=1 STEM_STRIDE=4 STEM_BLOCK=4 ./stem/run_stem_experiment.sh
 
-# counter-proof: MUST fail with a leakage assertion
+# negative control: must fail with a leakage assertion
 JANUS_STEM_GATE=1 STEM_STRIDE=1 STEM_BLOCK=4 \
   JANUS_STEM_BAND_OVERRIDE=1 ./stem/run_stem_experiment.sh
 
@@ -511,7 +476,7 @@ JANUS_STEM_GATE=1 STEM_STRIDE=1 STEM_BLOCK=4 STEM_NSTAGES=3 \
   ./stem/run_stem_experiment.sh full
 ```
 
-The downstream scripts in `src/` are stem-aware without a flag: they detect the
+The downstream scripts in `src/` are stem-aware without a flag. They detect the
 resolution mismatch, compress the attention mask accordingly, and pad the input
 to `max(64·S, ceil(L/S)·S)`. With no stem the code path is unchanged.
 
@@ -543,7 +508,7 @@ tools/          smoke tests and verification utilities
 docs/           file map (old thesis-era names → current names), experiment notes
 ```
 
-Everything is driven by a single environment variable:
+Paths come from environment variables:
 
 ```bash
 export PENGUIN_ROOT=/path/to/your/workspace     # defaults to $HOME/penguin_glm
@@ -552,20 +517,17 @@ export CROSSDNA_REPO=/path/to/CrossDNA          # only for CrossDNA steps
 ```
 
 No absolute paths are hard-coded. The original scripts were written against a
-specific server layout; `docs/FILE_MAP.md` records the correspondence for anyone
-cross-referencing the thesis.
-
----
+specific server layout, and `docs/FILE_MAP.md` records the correspondence for
+anyone cross-referencing the thesis.
 
 ## Environments
 
-CrossDNA and JanusDNA have **mutually incompatible dependency stacks**:
-JanusDNA pins `torch 2.5` through the `mamba_ssm` wheel, CrossDNA needs
-`flash-attn 2` plus Triton for the Comba kernels. They are therefore run in
-separate containers, and the pipeline is decoupled through two neutral
-interchange formats: `windows.parquet` (labels + covariates) and `.npz`
-embedding files. `src/common.py` imports cleanly in all three environments
-because every torch import inside it is lazy.
+CrossDNA and JanusDNA have incompatible dependency stacks. JanusDNA pins
+`torch 2.5` through the `mamba_ssm` wheel, while CrossDNA needs `flash-attn 2`
+plus Triton for the Comba kernels. They run in separate containers, and the
+pipeline is decoupled through two neutral interchange formats, `windows.parquet`
+(labels + covariates) and `.npz` embedding files. `src/common.py` imports cleanly
+in all three environments because every torch import inside it is lazy.
 
 ### CrossDNA
 
@@ -584,9 +546,9 @@ conda activate janusdna
 pip install mamba-ssm==2.2.4
 ```
 
-Then install the remaining dependencies from the upstream JanusDNA repository's
-own instructions. The Python version is not negotiable: the `mamba_ssm` 2.2.4
-wheel is built for cp311 and torch 2.5.
+Then install the remaining dependencies following the upstream JanusDNA
+instructions. Python must be 3.11, because the `mamba_ssm` 2.2.4 wheel is built
+for cp311 and torch 2.5.
 
 ### Analysis only
 
@@ -596,8 +558,6 @@ Clustering, probing and figures need no GPU stack:
 pip install numpy pandas polars scikit-learn matplotlib umap-learn pyarrow
 ```
 
----
-
 ## Quickstart
 
 ### 1. Get the genome
@@ -606,8 +566,8 @@ pip install numpy pandas polars scikit-learn matplotlib umap-learn pyarrow
 datasets download genome accession GCF_965638725.1 --include genome,gff3
 ```
 
-The soft-masked FASTA is required: repeat fraction is computed from lowercase
-characters and must be read *before* uppercasing.
+The soft-masked FASTA is required, because the repeat fraction is computed from
+the lowercase characters before uppercasing.
 
 ### 2. Build the windows
 
@@ -619,8 +579,8 @@ python src/prepare_windows.py \
   --window 1000 --per-class-train 20000 --per-class-eval 5000
 ```
 
-Produces `windows.parquet` (120,000 rows: sequence, label, split, scaffold, GC,
-repeat fraction, N fraction) and a `summary.json` with per-class composition.
+This produces `windows.parquet` (120,000 rows: sequence, label, split, scaffold,
+GC, repeat fraction, N fraction) and a `summary.json` with per-class composition.
 
 ### 3. Extract frozen embeddings
 
@@ -641,23 +601,23 @@ python src/extract_janusdna.py \
   --output          $PENGUIN_ROOT/out/emb_janusdna_144.npz
 ```
 
-The larger checkpoints need help. Two mechanisms are available and they are not
-equivalent:
+The larger checkpoints can produce non-finite values. There are two ways to
+handle them, and they are not equivalent:
 
-- `--amp-fp32 --sdpa-patch` forces the attention into fp32. Use this where it
-  suffices: it changes precision, not values.
-- `--clamp` zeroes non-finite values and COUNTS them. It is a containment
-  measure, not a fix: the count is written into the `.npz` metadata
-  (`clamp_fraction`) and must be reported alongside any result derived from
-  that file.
+- `--amp-fp32 --sdpa-patch` runs the attention in fp32. It changes only the
+  precision, so use it whenever it is enough.
+- `--clamp` replaces non-finite values with zero and counts them. It only
+  contains the problem, so the count is written into the `.npz` metadata
+  (`clamp_fraction`) and should be reported with any result derived from that
+  file.
 
-**The CrossDNA-519M embeddings behind the results were extracted with `--sdp
-default --clamp`, and the clamp never intervened**: its counter stayed at zero
-over about 9.46 × 10¹² intermediate activations checked during the full
-extraction, so no value was zeroed. `tools/inspect_embeddings.py` separates
-non-finite values from clamped ones in an existing archive.
+The CrossDNA-519M embeddings used for the results were extracted with
+`--sdp default --clamp`. The clamp counter stayed at zero over about
+9.46 × 10¹² intermediate activations checked during the full extraction, so no
+value was replaced. `tools/inspect_embeddings.py` separates non-finite values from
+clamped ones in an existing archive.
 
-Sanity-check the result before spending GPU time downstream:
+Check the embeddings before spending GPU time downstream:
 
 ```bash
 python tools/check_embeddings.py --npz $PENGUIN_ROOT/out/emb_janusdna_144.npz --expected-dim 144
@@ -711,7 +671,7 @@ python src/finetune_lora_janusdna.py \
 
 LoRA configuration: r = 8, α = 16, dropout = 0.05, backbone frozen, `lr_lora`
 1e-4 and `lr_head` 1e-3, early stopping on validation MCC. The default budget is
-10 epochs, which is not enough for JanusDNA to saturate:
+10 epochs, which is not enough for JanusDNA to saturate.
 `bash src/run_lora_saturated.sh` re-runs the baseline, the human checkpoint and
 the stems with a 25-epoch budget and reports, for each run, whether the
 validation maximum fell before the end. `tools/lora_summary.sh` tabulates every
@@ -725,11 +685,9 @@ which is never executed during adaptation and contributes nothing, so the result
 files count those adapters too (192 modules and 688,644 parameters for the 8.1M).
 `src/finetune_lora_crossdna.py` saves both counts, and `tools/count_lora_params.py`
 derives them from the checkpoint headers without a GPU. For JanusDNA (27
-projections, 102,276 trainable parameters, 0.286%), `dt_proj` is **excluded**: it
-is structurally incompatible with LoRA, and `tools/verify_lora_targets.py`
-demonstrates empirically which projections an adapter actually reaches.
-
----
+projections, 102,276 trainable parameters, 0.286%) `dt_proj` is excluded,
+because it is structurally incompatible with LoRA; `tools/verify_lora_targets.py`
+checks which projections an adapter actually reaches.
 
 ## Pre-training from scratch
 
@@ -750,45 +708,45 @@ python pretrain/crossdna_ckpt_to_hf.py \
   --out-dir $PENGUIN_ROOT/crossdna/hf_scratch_penguin_clean
 ```
 
-**The tiling step is not free.** JanusDNA's `HG38Dataset` ignores the BED file's
-`end` column and recomputes it as `start + MAX_ALLOWED_LENGTH`, where
-`MAX_ALLOWED_LENGTH = 2^20 = 1048576`. `--seqlen` is the training sequence
-length and must DIVIDE 2^20; `--tile-step` is the BED interval and defaults to
-2^20, which is what JanusDNA needs. For CrossDNA and HyenaDNA, set
-`--tile-step` equal to `--seqlen` so one BED row is one training example.
-Getting this wrong silently produces windows of the wrong length.
+The tiling step needs care. JanusDNA's `HG38Dataset` ignores the BED file's `end`
+column and recomputes it as `start + MAX_ALLOWED_LENGTH`, where
+`MAX_ALLOWED_LENGTH = 2^20 = 1048576`. `--seqlen` is the training sequence length
+and must divide 2^20; `--tile-step` is the BED interval and defaults to 2^20,
+which is what JanusDNA needs. For CrossDNA and HyenaDNA, set `--tile-step` equal
+to `--seqlen` so that one BED row is one training example. With a wrong value the
+windows silently get the wrong length.
 
-CrossDNA checkpoints must be converted to HuggingFace layout before extraction
-or LoRA; `crossdna_ckpt_to_hf.py` produces a directory structurally identical to
-the released weights.
+CrossDNA checkpoints must be converted to the HuggingFace layout before
+extraction or LoRA; `crossdna_ckpt_to_hf.py` produces a directory structurally
+identical to the released weights.
 
 ### Corpus construction
 
-The pre-training corpus is built from the downstream TRAIN scaffolds only.
+The pre-training corpus is built from the downstream training scaffolds only.
 `make_pretrain_bed_clean.py` reads `windows.parquet`, collects every scaffold
 used by the downstream val and test splits, and excludes those scaffolds
 entirely before tiling.
 
-This is not optional. Pre-training never sees the labels, but it does model the
-sequence, and a model that has already fitted the nucleotide statistics of a
-test scaffold will score better there for reasons that have nothing to do with
-domain adaptation. Any comparison between an in-domain and a transferred model
-is only meaningful if the in-domain corpus and the evaluation set are disjoint
-at the scaffold level, the same guarantee the downstream split itself provides.
+Pre-training never sees the labels, but it does model the sequence, and a model
+that has already fitted the nucleotide statistics of a test scaffold scores
+better there for reasons unrelated to domain adaptation. A comparison between an
+in-domain and a transferred model is meaningful only if the in-domain corpus and
+the evaluation set are disjoint at the scaffold level, the same guarantee the
+downstream split provides.
 
-On this assembly the exclusion removes a substantial fraction of the genome,
-which is why the from-scratch budgets are as small as they are.
-
----
+On this assembly 47 scaffolds are excluded, and chromosome `NC_134951.1`, which
+holds 13,715 of the 20,000 test windows, appears in no row of the resulting BED
+files.
 
 ## Known issues
 
-These are environment-specific traps, each of which cost real debugging time.
+Problems met while setting up the environments and running the pipeline, with
+the fix used in this repository.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `TypeError: Autotuner.__init__() got an unexpected keyword argument 'do_bench'` | `flash-attn` silently downgrades Triton to 3.1.0 | reinstall `triton==3.2.0` **after** flash-attn, with `--no-deps --force-reinstall` |
-| Crash on `import fla` | `fla/ops/attn/parallel.py` applies `@torch.compile` at import time; `DISABLE_TORCH_COMPILE=1` is not enough | monkey-patch `torch.compile` to identity *before* any fla/transformers import (see `env/patches/`) |
+| `TypeError: Autotuner.__init__() got an unexpected keyword argument 'do_bench'` | `flash-attn` silently downgrades Triton to 3.1.0 | reinstall `triton==3.2.0` after flash-attn, with `--no-deps --force-reinstall` |
+| Crash on `import fla` | `fla/ops/attn/parallel.py` applies `@torch.compile` at import time; `DISABLE_TORCH_COMPILE=1` is not enough | monkey-patch `torch.compile` to identity before any fla/transformers import (see `env/patches/`) |
 | `ModuleNotFoundError: fla` despite install | `fla` is a namespace package split across two PyPI distributions | install both `flash-linear-attention==0.4.0` and `fla-core==0.4.0` |
 | NumPy ABI errors | NumPy 2 breaks the pinned torch build | pin `numpy<2` |
 | `repetition level histogram size mismatch` reading `windows.parquet` | pyarrow version mismatch | read scalar columns with `polars` instead |
@@ -796,56 +754,49 @@ These are environment-specific traps, each of which cost real debugging time.
 | Non-finite values in CrossDNA embeddings | overflow with the `math` SDP implementation | pass `--sdp default`; the fp32 attention replacement lives in `env/patches/sdpa_fp32.py` |
 | CrossDNA-519M dtype mismatch `bf16 vs fp32` | autocast bf16 is incompatible with the `fla` kernels | extract in fp32, no autocast |
 | CrossDNA returns non-finite values in 16-bit autocast | numerical fragility of the model in bf16: the from-scratch 8.1M checkpoint fails already at the first forward pass. `tools/certify_fp32_patch.py` reproduces the failure as its control run. | run in fp32 (`--amp-fp32 --sdpa-patch`), which is what this pipeline does throughout |
-| `device-side assert` in the Triton kernel for S=16/32 | the compressed grid falls below FlexAttention's floor: `q_len = 2M` against `BLOCK_SIZE = 128` needs M ≥ 64 | pad the input to 64·S, and validate the padding on the METRICS (`stem/gates/`) rather than assuming it |
+| `device-side assert` in the Triton kernel for S=16/32 | the compressed grid falls below FlexAttention's floor: `q_len = 2M` against `BLOCK_SIZE = 128` needs M ≥ 64 | pad the input to 64·S and validate the padding on the metrics (`stem/gates/`) |
 | `AssertionError: T=1000 not divisible by S` | 1000 is not a multiple of 16 or 32 | right-padding inside `encode()`, marked invalid in the mask. It must live in `encode()`, not in the forward: the probe that determines the hidden width calls `encode()` too, and padding downstream leaves that first call unpadded |
 | A shell script continues after a Python crash | `set -e` sees the exit code of `tee`, not of the command feeding it | add `set -o pipefail` |
 | `RuntimeError: size of tensor a (250) must match tensor b (1000)` | pooling a super-token-resolution hidden state against a nucleotide-resolution mask | compress the mask: a super-token is valid if its block holds at least one real position |
 | A stem checkpoint silently loads into a model built without the stem | `load_state_dict(strict=False)` ignores the `stem.*` weights without error | gate on `missing`/`unexpected` before every extraction and fine-tune |
 | Two scales running in parallel destroy each other's patched repo | a shared mount and a `rm -rf` at startup | one patched copy per scale, `JanusDNA_stem_s<N>` |
 | `rsync: command not found` in the container | minimal image | fall back to `cp -a` plus pruning of `.git`/`wandb`/`*.ckpt` |
-| The exclusion band silently covers only part of the predicted block | `BAND` is hardcoded to 1 **in grid cells**; it matched the block only because one cell was worth one block | parametrise `BAND = BLOCK / STRIDE` in both `create_janus_mask` and `final_fusion_repos_formasked`; patching the mask alone has no effect |
+| The exclusion band silently covers only part of the predicted block | `BAND` is hardcoded to 1, counted in grid cells; it matched the block only because one cell was worth one block | parametrise `BAND = BLOCK / STRIDE` in both `create_janus_mask` and `final_fusion_repos_formasked`; patching the mask alone has no effect |
 | A wrong stem stage count or a wrong `BLOCK` passes the weight-loading gate | a missing stage leaves only four unexpected keys, below the threshold; `BAND` is not a parameter at all, so a wrong `BLOCK` produces no mismatch | derive the configuration from the checkpoint with `tools/check_stem_config.py` before rebuilding the model |
 | Logged perplexity looks implausibly high | the harness logs `exp(main_loss + moe_loss)`, including the MoE router's auxiliary term | report `exp(main_loss)`; with `moe_loss` ≈ 0.8 the logged value is inflated by e^0.8 ≈ 2.2 |
-| Held-out loss degrades over the last epochs of every 50k-step run | genuine overfitting of the stem runs, which end past their optimum; the baseline at 15k steps ends near it | use `checkpoints/test/loss.ckpt` (the test-loss minimum, which *is* saved) when the training point matters; for the NMI against GC it does not (1.2%) |
+| Held-out loss degrades over the last epochs of every 50k-step run | overfitting of the stem runs, which end past their optimum; the baseline at 15k steps ends near it | use `checkpoints/test/loss.ckpt` (the test-loss minimum, which is saved) when the training point matters; for the NMI against GC it does not (1.2%) |
 | LoRA has not converged at 10 epochs | the validation maximum falls on the last epochs (nine more epochs gave the human JanusDNA +0.018 MCC) | run `src/run_lora_saturated.sh` before reading small LoRA margins |
 | Two LoRA results look comparable but are not | one of them was resumed from an earlier run and trained for more epochs | compare runs with the same budget; `tools/lora_summary.sh` shows the epoch of the maximum and the epochs run |
 | The full-model gate never runs before a shape crash | `on_train_start` fires *after* Lightning's sanity check | wire the gate into `on_fit_start` instead |
 | Lightning resumes an already-finished run | a stale `last.ckpt` in the output directory | wipe the smoke-test directory before the real run |
 | `fsspec_exists()` crashes on `train.ckpt=null` | Hydra passes the literal `null` | pass a non-existent path string instead |
 
-`env/container_setup.sh` applies the recurring ones in the right order; source it
-on entering a fresh container.
-
----
+`env/container_setup.sh` applies the recurring fixes in the right order; source it
+when entering a fresh container.
 
 ## Limitations
 
-- **Single species, single annotation.** All conclusions are about one avian
-  genome with one RefSeq annotation. The GC-attractor result is consistent with
-  what has been reported for other gLMs, but this work does not establish it
-  generally.
-- **The label scheme is a modelling choice.** Centre-based labelling and
-  UTR-as-exon-minus-CDS are defensible but not unique; both are isolated in a
-  single function in `src/prepare_windows.py` so they can be replaced without
-  touching anything else.
-- **The test set is concentrated.** 13,715 of the 20,000 test windows come from
-  one chromosome (`NC_134951.1`). Bootstrap intervals on the test MCC (about
-  ±0.009) reflect window sampling only; variability between chromosomes is not
-  estimated.
-- **One seed per pre-training run.** The run-to-run variability of pre-training
-  is not measured; seeds vary only the probes.
-- **Compute budgets are not uniform.** The JanusDNA baseline runs 15,000 steps,
-  the stem runs 50,000; LoRA was run to saturation for JanusDNA, not for
-  CrossDNA. Step 1 against `S = 4` is the only fully budget-matched comparison
-  of the stem experiment.
-- **Window and objective remain confounded** in the stem experiment; the fourth
+- All conclusions concern one avian genome with one RefSeq annotation. The
+  GC-attractor result is consistent with what has been reported for other gLMs,
+  but this work does not establish it in general.
+- The labels depend on two modelling choices, centre-based labelling and UTRs
+  derived as exons minus CDS. Both are isolated in a single function in
+  `src/prepare_windows.py`, so they can be replaced without touching anything
+  else.
+- Most of the test set, 13,715 of the 20,000 windows, comes from one chromosome
+  (`NC_134951.1`). The bootstrap intervals on the test MCC (about
+  ±0.009) reflect window sampling only; the variability between chromosomes is
+  not estimated.
+- Each pre-training run was done once, so the run-to-run variability of
+  pre-training is not measured; the seeds reported above vary only the
+  downstream stage.
+- The JanusDNA baseline runs 15,000 steps and the stem runs 50,000, and LoRA was
+  run to saturation for JanusDNA but not for CrossDNA. In the stem experiment
+  only step 1 against `S = 4` is fully budget-matched.
+- In the stem experiment window and objective are still confounded; the fourth
   cell that would separate them was not run.
-- **Pre-training budgets are small.** 15K steps (JanusDNA) and 60K steps
-  (CrossDNA) on a single H100 are far from the compute used for the released
-  human checkpoints, so "from scratch" here means "from scratch on a student
-  budget".
-
----
+- Pre-training used 15K steps (JanusDNA) and 60K steps (CrossDNA) on a single
+  H100, far from the compute behind the released human checkpoints.
 
 ## Citing
 
